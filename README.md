@@ -40,6 +40,7 @@ npm test             # 146 tests: alerts, ladder, PnL, parser, API, controller, 
 npm run probe        # can this machine reach Binance and Yahoo right now?
 npm run proxy        # OPTIONAL: same quote service on :8787 if you want it separate
 npm run pack         # build + evenhub pack → targetglance.ehpk
+npm run zip          # reproducible source archive → artifacts/targetglance.zip
 ```
 
 ### Live data keys (optional — the app runs without one)

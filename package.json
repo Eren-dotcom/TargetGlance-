@@ -11,7 +11,8 @@
     "proxy": "node --experimental-strip-types src/server/standalone.ts",
     "test": "vitest run",
     "probe": "node --experimental-strip-types src/server/standalone.ts --probe",
-    "pack": "npm run build && evenhub pack app.json dist -o targetglance.ehpk"
+    "pack": "npm run build && evenhub pack app.json dist -o targetglance.ehpk",
+    "zip": "node scripts/zip.mjs"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.16",
