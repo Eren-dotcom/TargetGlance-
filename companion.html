@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TargetGlance · Judge Mode</title>
+    <style>
+      :root { color-scheme: dark; --line: #1d3a2a; --dim: #6f8f7d; --ink: #d7ecdf; --accent: #4ade9a; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #080d0a; color: var(--ink); font: 13px/1.5 ui-monospace, Menlo, monospace; }
+      header { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
+      h1 { margin: 0; font-size: 14px; letter-spacing: .16em; }
+      header span { color: var(--dim); }
+      main { display: grid; gap: 16px; padding: 16px 20px 40px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+      section { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: #0b1210; }
+      h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: .14em; color: var(--dim); font-weight: 600; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+      button { background: #10201a; color: var(--ink); border: 1px solid #23422f; border-radius: 6px; padding: 5px 9px; font: inherit; cursor: pointer; }
+      button:hover { border-color: var(--accent); }
+      button.on { background: #14402c; border-color: var(--accent); color: #eafff3; }
+      input[type="text"], input[type="number"], select { background: #071009; color: var(--ink); border: 1px solid #23422f; border-radius: 6px; padding: 5px 8px; font: inherit; min-width: 0; }
+      input[type="text"] { flex: 1; }
+      table { width: 100%; border-collapse: collapse; }
+      td, th { text-align: left; padding: 3px 6px 3px 0; border-bottom: 1px solid #12241b; font-size: 12px; white-space: nowrap; }
+      th { color: var(--dim); font-weight: 500; }
+      .dim { color: var(--dim); }
+      .bad { color: #f0a08a; }
+      .good { color: var(--accent); }
+      .tag { border: 1px solid #23422f; border-radius: 4px; padding: 0 4px; font-size: 11px; color: var(--dim); }
+      .tag.mock { border-color: #7a5c2a; color: #e7c07a; }
+      .tag.stale { border-color: #7a3a3a; color: #f0a08a; }
+      pre { margin: 0; max-height: 180px; overflow: auto; font-size: 12px; color: #a8c9b6; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>TARGETGLANCE · JUDGE MODE</h1>
+      <span>Companion controls · <a style="color:var(--accent)" href="/">open the glasses app</a></span>
+      <span id="health" class="dim">service …</span>
+    </header>
+
+    <main>
+      <section>
+        <h2>WATCHLIST</h2>
+        <div class="row">
+          <input id="sym" type="text" placeholder="Add symbol: RELIANCE.NS, ETH, SPY" />
+          <button id="add">Add</button>
+        </div>
+        <div class="row" id="presets"></div>
+        <div class="row" id="chips"></div>
+        <h2 style="margin-top:14px">TARGETS — REGEX PARSER, NO LLM</h2>
+        <div class="row">
+          <input id="phrase" type="text" placeholder='SOL buy 140 sell 180  ·  BTC buy 92k sell 105k  ·  NVDA buy 118-122 sell 148-152' />
+          <button id="parse">Apply</button>
+        </div>
+        <div id="parseOut" class="dim"></div>
+      </section>
+
+      <section>
+        <h2>SIMULATE (the demo never waits for the market)</h2>
+        <div class="row" id="sim"></div>
+        <div class="row">
+          <button id="clearSim">Clear sim</button>
+          <button id="mock">Force mock</button>
+          <button id="stale">Force stale</button>
+        </div>
+        <div class="row">
+          <label class="dim">Session</label>
+          <select id="session">
+            <option value="auto">auto (real clock)</option>
+            <option value="LIVE">LIVE</option>
+            <option value="PRE">PRE</option>
+            <option value="AH">AH</option>
+            <option value="CLOSED">CLOSED</option>
+          </select>
+          <label class="dim">Poll</label>
+          <select id="poll">
+            <option value="0">5s (G2 default)</option>
+          </select>
+        </div>
+        <div class="row">
+          <button id="seed">Seed portfolio</button>
+          <button id="resetAlerts">Reset alert states</button>
+          <button id="reset" class="bad">Reset everything</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>LIVE QUOTES</h2>
+        <table>
+          <thead><tr><th>sym</th><th>price</th><th>day</th><th>session</th><th>source</th><th>age</th></tr></thead>
+          <tbody id="quotes"></tbody>
+        </table>
+        <div class="row" style="margin-top:10px">
+          <button id="probe">Probe upstreams</button>
+          <span id="probeOut" class="dim"></span>
+        </div>
+      </section>
+
+      <section>
+        <h2>LOG</h2>
+        <div class="row"><button id="refreshLog">Refresh</button><button id="export">Export journal JSON</button></div>
+        <pre id="log">—</pre>
+      </section>
+    </main>
+    <script type="module" src="/src/companion/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,406 @@
+# TargetGlance — Build Plan & Analysis
+
+**Track 03 (Exchanges & Stocks) · Even Realities G2 · 576×288**
+
+> Glanceable buy-zone / sell-zone alerts for **stocks + crypto** on Even G2.
+> Set entry and exit zones, see a live range bar, execute 1-tap **paper** trades.
+> No broker or exchange API keys.
+
+Built with the **[ponytail](https://github.com/DietrichGebert/ponytail) "lazy senior dev" rules**
+(MIT, vendored as `AGENTS.md`): smallest complete change, name what you skip, no code
+nobody asked for. Every place this plan deletes something the attached docs asked for is
+listed in §3 and §15.
+
+---
+
+## 1. What the two input documents agree on
+
+| Area | Plan decision |
+|---|---|
+| Core promise | 0.5-second glanceable buy/sell discipline, not liquidation panic |
+| Differentiator | Stocks **and** crypto in one watchlist (most Track 03 builds are crypto-only) |
+| Signature UI | Unicode range bar: `BUY 120 [────●──] 150 SELL` |
+| Safety | Paper only. No real orders, no keys, 5-second undo |
+| Demo insurance | "Judge Mode" companion page: simulate dip/spike, fake clock, reset |
+| Honesty | Data-quality badges (`LIVE / DELAYED / STALE / MOCK`), session labels |
+
+Both docs are sound. The work below keeps every P0 behaviour and fixes the parts that
+would break on the judge's machine or on real hardware.
+
+---
+
+## 2. Analysis — where the attached plan would have failed
+
+### 2.1 Two processes, two origins (fixed)
+
+The docs specify a Vite app on `:5173` calling a Node proxy on `:8787`. On real hardware the
+G2 app is **packed and loaded from Even's WebView**, where `app.json` network permissions use a
+host **whitelist** — `http://localhost:8787` is a separate origin, a CORS preflight, and a
+whitelist entry. That is three ways for a 10-second demo to fail.
+
+**Fix:** the quote service is a *module*, mounted in **two places** — a Vite middleware plugin
+(dev, one process, one origin, relative `/api/...`) and a 20-line standalone Node server
+(`npm run proxy`, port 8787) for anyone who wants a separate host. The G2 app only ever calls
+relative `/api/quotes`, so there is no CORS, no second port to forget, and the packaged app
+needs exactly one host in its whitelist.
+
+### 2.2 "Companion syncs to localStorage" does not work on hardware (fixed)
+
+The docs say the phone companion writes targets to `localStorage` and "syncs instantly to the
+G2 display". The phone browser and the Even App WebView are **different storage origins** on
+real hardware — the phone would set targets the glasses never see. It only appears to work in
+the simulator, where both pages share one WebView.
+
+**Fix:** targets, paper book, alert state and trade log live on the **server** behind one tiny
+generic endpoint (`GET/PUT /api/state/:key`), with `localStorage` as an offline cache. Same code
+works in the simulator, in a browser preview, and on a phone + glasses pair.
+`shortcut:` last-write-wins, single user. Upgrade to per-device revisions if this ever gets a
+second user.
+
+### 2.3 "Zero API keys" was true but fragile (kept, guarded)
+
+The judge's machine may be geo-blocked or rate-limited from Binance/Yahoo (this sandbox is —
+both are unreachable here, which is exactly the failure mode to expect on demo day).
+
+**Fix:** 10 s cache, `Promise.allSettled` per source, per-symbol last-known-good, deterministic
+mock fallback, and a visible badge on every row. `npm run probe` prints the status of each
+upstream in 2 seconds so the demo can start on the mock path deliberately, not by accident.
+
+### 2.4 Alerts are in-session only (stated, not faked)
+
+Even G2 background push is not verified. The docs already hedge this; the README states it
+plainly: alerts fire **while the app is open**, plus the Judge Mode trigger. No claim is made
+about background notifications.
+
+### 2.5 Voice-set targets (narrowed, honestly)
+
+Regex parsing is kept and tested (`"SOL buy 140 sell 180"`, `"BTC buy 92k sell 105k"`,
+`"NVDA buy 118-122 sell 148-152"`). Speech-to-text is **cut**: the G2 mic gives raw PCM, and
+turning PCM into text needs either a cloud key (breaks the zero-key claim) or a local Whisper
+install (breaks the 10-second run). The parser is wired to a text box on the companion page and
+is ready for any STT later — the hard, testable half ships.
+
+### 2.6 UI assumptions corrected against the real SDK
+
+Verified against `@evenrealities/even_hub_sdk@0.0.16` and `@evenrealities/pretext@0.1.4`:
+
+- The G2 font **is proportional**, and fullwidth glyphs (`─ ● ◆ █ │`) are a hard **20 px**.
+  576 px / 20 px = **28.8 characters** — the docs' `┌──│└` box frames would wrap and shred the
+  layout. Screen art is now plain text rows, and every line is measured with `pretext` so it can
+  never wrap. `pxTruncate` guards long symbols.
+- `:`, `|`, `▪`, `↺`, `✕`, `░` are **missing glyphs** at this weight — banned from the UI.
+- `🟢`/`⚠` render as 4 px placeholder boxes; state is shown with `●`/`○`/`◆` + words instead.
+- A full-screen text container at `0,0 576×288` with `isEventCapture: 1` passes the SDK's page
+  validator, needs **one** container, and one `textContainerUpgrade` per frame is the flicker-free
+  path the docs wanted. So the whole app is **one text container**, not 5 screens of widgets:
+  screens are pure string builders, input is `textEvent` (`CLICK`, `SCROLL_TOP`, `SCROLL_BOTTOM`,
+  `DOUBLE_CLICK`, `LONG_PRESS`).
+
+### 2.7 Auto-flip sell logic simplified (deleted state)
+
+The docs model an explicit `armed` buy/sell flag that auto-flips. The rule that produces the
+same behaviour with no state: **buy-zone alerts fire when you are flat, sell-zone alerts fire
+only when you hold.** After a paper buy you are holding, so the sell alert is armed by
+definition; before it, a sell alert would have nothing to sell. Auto-arm, never auto-sell,
+zero flags, nothing to desync.
+
+---
+
+## 3. Final scope
+
+### Ship (P0)
+
+1. **Watchlist** — 3 rows, range bar, session chip, freshness dot, paper PnL header.
+2. **Quick target editor** — buy zone, sell zone, stop; swipe adjust, tap to switch field,
+   quick-set −5 % / −10 % / +5 % / +10 %.
+3. **Alert state machine** — crossing-only, hysteresis, 60 s cooldown, one flash at a time with a
+   queue, 1 h snooze, persisted.
+4. **Alert flash** — one primary action (tap = paper buy/sell), swipe = dismiss.
+5. **Paper trade + 5 s undo** — exact state restore. Buy arms the sell alert. Never auto-sells.
+6. **Portfolio + PnL** — unrealised, realised, cash, total return.
+7. **Trade journal** — last 10 trades, JSON export from the companion.
+8. **Judge Mode companion** — simulate dip/spike, fake session clock, force stale/mock, seed
+   portfolio, reset, live alert + trade log, poll interval, target text box + voice-phrase parser.
+9. **Session labels** — `LIVE / PRE / AH / CLOSED / 24-7`, DST-correct via `Intl` (America/New_York).
+10. **Data-quality badges** — `LIVE / DELAYED / STALE / MOCK` + "12s ago".
+11. **Quote service** — Binance + Yahoo, 10 s cache, allowlist, per-source `allSettled`, mock
+    fallback, `/health`, `/api/probe`.
+12. **Tests + README** — `npm i && npm run dev` and nothing else.
+
+### Ship because it was nearly free (P1)
+
+13. Zone targets (`118-122`) as well as point targets; one parser handles both.
+14. Stop / invalidation zone, paper only.
+15. Falling-knife confirmation: normal ticks alert on crossing, a wild tick (≥ 7 % on the day)
+    must hold for 2 polls.
+16. Smart sizing: 5 % of cash, whole shares for stocks, fractional for crypto.
+17. Asset-class filter `ALL / STOCKS / CRYPTO` on the list (long-press).
+18. Presets: Megacap / Crypto majors — as companion buttons that fill the watchlist.
+
+### Cut, and named (ponytail rule 1)
+
+| Cut | Why |
+|---|---|
+| Cloud STT / Whisper | Needs a key or a heavy local install; regex parser ships instead |
+| Background push alerts | Not verified on G2; claiming it is a demo-day bug |
+| Scaled take-profit ladder (P2) | Three more price fields and a splittable position model for one demo line |
+| Portfolio heat strip (P2) | The range bar already answers "how far to sell" |
+| Animations / transitions | Text containers have no tweening; `textColor` + `●` is the whole budget |
+| G2 contextual-menu presets | Menu items need 32-byte names and a rebuild per switch, for a control the phone already has |
+| Event badges (earnings/ex-div/FOMC) | Needs a data source or hand-maintained dates; a wrong date costs credibility |
+| Order book, candles, LLM chat, auth, social | Explicitly in the docs' "do not add" list |
+| Vite SSR / router / state library | One screen at a time, one `AppFrame` object; a router would be bigger than the app |
+
+---
+
+## 4. Architecture
+
+```
+                    ┌─────────────────── one origin, no CORS ───────────────────┐
+ phone / judge  ──► │ companion.html                     (Judge Mode, targets)  │
+ G2 WebView     ──► │ index.html  ──► src/g2/main.ts  (one text container)      │
+ simulator      ──► │                      │                                    │
+                    │                      ▼                                    │
+                    │        /api/quotes  /api/state/:key  /api/judge  /health  │
+                    │                      │                                    │
+                    │        src/server/quotes.ts  ◄── Binance · Yahoo · Mock   │
+                    └───────────────────────────────────────────────────────────┘
+```
+
+- **`src/core/*` — pure, no DOM, no SDK.** Range bar, session clock, target validation, alert
+  state machine, paper book, PnL, undo, voice parser. This is what the tests hammer.
+- **`src/g2/*` — the view.** `frame.ts` builds an `AppFrame` (screen + lines) from state;
+  `sdk.ts` pushes it to the glasses via `textContainerUpgrade`; `mock.ts` renders the same frame
+  into a 576×288 DOM box so the app is usable in a plain browser (and in the Arena preview)
+  without the simulator.
+- **`src/server/*` — the service.** `quotes.ts` (sources + cache + judge sim), `store.ts`
+  (k/v state + judge overrides), `handler.ts` (framework-free request router). Mounted by
+  `vite.config.ts` (dev) and `src/server/standalone.ts` (`npm run proxy`, :8787).
+- **Build:** `npm run build` → `dist/` → `evenhub pack app.json dist`.
+
+---
+
+## 5. Data contracts
+
+### `GET /api/quotes?symbols=NVDA,SOL`
+
+```json
+[{ "symbol":"NVDA", "price":138.2, "prevClose":132.6, "changePct":4.23,
+   "session":"AH", "source":"yahoo", "stale":false, "mock":false, "ts":"2026-11-27T12:00:04Z" }]
+```
+
+Rules: allowlisted symbols only (400 otherwise); cache 10 s per symbol; per-source
+`Promise.allSettled`; failure → last-known-good with `stale: true`; nothing known → deterministic
+mock with `mock: true`; crypto quotes are USDT and the UI prints `≈$`.
+
+### `GET /api/state/:key` · `PUT /api/state/:key` (JSON body)
+
+Keys: `targets`, `book`, `alerts`, `trades`. Unknown key → 400. Body ≤ 64 KB.
+`shortcut:` last-write-wins, no auth, single user on localhost.
+
+### `GET|POST /api/judge`
+
+```json
+{ "mock": false, "forceStale": false, "session": "auto",
+  "sim": { "NVDA": { "pct": -13.8 } }, "pollMs": 5000 }
+```
+
+`session`: `auto | LIVE | PRE | AH | CLOSED | 24-7`. `sim` is a per-symbol override that
+replaces the live price until cleared — this is what makes the 90-second demo deterministic.
+
+### `GET /health` → `{"ok":true,"ts":"…"}` · `GET /api/probe` → upstream status
+
+### Storage (server primary, `localStorage` cache)
+
+```
+targetglance_targets  { "NVDA": { buy: {low,high}, sell: {low,high}, stop: null } }
+targetglance_book     { cash: 10000, positions: { NVDA: {qty, avgCost, realized} } }
+targetglance_alerts   { "NVDA": { zone: "buy", lastPrice, lastAlertAt, snoozedUntil, held } }
+targetglance_trades   [ { symbol, side, qty, price, reason, pnl, ts } ]   // last 10
+```
+
+---
+
+## 6. Screens (576×288, ~10 lines of 27 px, ≤ 112 chars/line, measured)
+
+Type is ~10 px tall; rows are padded and measured with `pretext.getTextWidth`, header aligned
+with spaces, never tabs.
+
+**S1 Watchlist** — `▲`/`▼` + percent, `●` freshness (`●` ok, `○` stale), session chip, bar.
+```
+TARGETGLANCE   PAPER $10,340  +3.4%  ●
+> NVDA   ≈$138.20  AH +4.2%   BUY 118-122 ────────●── 148-152 SELL
+  SOL    ≈$142.50  24/7 -2.1%  BUY 139-141 ●─────────── 178-182 SELL
+  BTC    ≈$97,400  24/7 +0.8%  BUY 92k     ──────●───── 105k SELL
+```
+**S2 Alert flash** — huge one-liner, single action, undo toast afterwards.
+```
+● BUY ZONE HIT · NVDA @ $119.40
+Target 118-122 · -13.8% today
+Paper buy 4 NVDA · $477 (5% cash)
+[TAP = YES]     [SWIPE = DISMISS]
+```
+**S3 Editor** — one field selected; swipe adjusts by a step that follows the price magnitude.
+```
+EDIT · NVDA  ≈$138.20   ▲+4.2%  AH
+> Buy zone    118 - 122    (-5%  -10%)
+  Sell zone   148 - 152    (+5%  +10%)
+  Stop        110.00
+  Held        10 sh · +$182.00
+SWIPE: -/+ step · TAP: next · LONG: save+back
+```
+**S4 Portfolio / journal** — toggled by long-press on S1.
+```
+PAPER PORTFOLIO  $10,340  +3.4%
+NVDA  10 sh  avg 119.40  +$188.00
+SOL   5 SOL  avg 139.80  +$13.50
+Cash $8,259  Realised +$127.20
+LONG: journal · TAP: back
+```
+
+Input map: `SCROLL_TOP/BOTTOM` = move selection · `CLICK` = open/confirm ·
+`DOUBLE_CLICK` = back · `LONG_PRESS` = portfolio/journal. One primary action per screen,
+swipe always dismisses — no double-tap-to-dismiss anywhere (glasses ambiguity).
+
+---
+
+## 7. Alert state machine (F03)
+
+Per symbol, persisted in `targetglance_alerts`:
+
+```
+zone: null | buy | sell      (zone we were last inside)
+held: int                    (consecutive polls inside the zone)
+```
+
+On each poll, `next(p) = zoneOf(price)`:
+
+| From | To | Action |
+|---|---|---|
+| `null` | `buy` | confirm → **TRIGGERED** `buy` |
+| `null` | `sell` | confirm → **TRIGGERED** `sell` (only if holding) |
+| `buy` | `null` | clear (needs price > buy.high × 1.0025 — hysteresis) |
+| `buy` | `sell` | **TRIGGERED** `sell` (crossed the whole band) |
+| same | same | nothing — **no re-alert while in the zone** |
+
+Guards: 60 s cooldown per symbol **per zone** (a buy→sell crossing is news, not a repeat);
+one flash on screen, the rest queue (max 3, drop oldest);
+snooze 1 h; `held` must reach 1 normally, 2 when `|changePct| ≥ 7` (falling-knife). Snooze and
+cooldown are ignored by the Judge Mode trigger so a rehearsal is always one tap.
+
+---
+
+## 8. Paper rules (F07, F10, PnL)
+
+- Start cash **$10,000**. Cash can never go negative: order qty is clamped to affordable.
+- Sizing 5 % of cash; stocks round **down** to whole shares (an unaffordable stock shows
+  `no cash`, not a silent 0-share trade); crypto 6 decimals.
+- Average cost per symbol; realised PnL on sell = `(price − avgCost) × qty`; unrealised =
+  `(last − avgCost) × qty`; total = cash + market value.
+- Undo: the pre-trade snapshot (`book` + `trades` + `alerts`) is kept for 5 s and restored
+  byte-for-byte; a second trade inside the window clears the undo.
+- Fill price is the live price at confirmation, not the target — no fantasy fills.
+
+---
+
+## 9. Sessions
+
+Crypto `24-7`. Stocks, computed in `America/New_York` through `Intl` (DST-correct):
+`04:00–09:30 PRE`, `09:30–16:00 LIVE`, `16:00–20:00 AH`, otherwise `CLOSED`; weekends `CLOSED`.
+`shortcut:` no holiday calendar (US market holidays show `LIVE`), upgrade if this outlives the demo.
+Yahoo's own `marketState` overrides the clock when it disagrees.
+
+---
+
+## 10. Judge Mode companion
+
+`companion.html` — one page, no framework: watchlist editor + target text box + the controls
+below, all writing through `/api/judge` and `/api/state`.
+
+`Simulate −12 %` / `Simulate +12 %` per symbol · `Clear sim` · `Force mock` · `Force stale` ·
+`Session: auto/LIVE/PRE/AH/CLOSED` · `Seed portfolio` · `Reset everything` · poll interval ·
+live `/api/quotes` table · alert + trade log · journal JSON export.
+
+---
+
+## 11. File map
+
+```
+PLAN.md · AGENTS.md · README.md · app.json · index.html · companion.html
+package.json · tsconfig.json · vite.config.ts
+src/core/     quotes.ts alerts.ts paper.ts targets.ts session.ts voice.ts
+src/g2/       frame.ts main.ts sdk.ts mock.ts screens/ (in frame.ts)
+src/server/   quotes.ts store.ts handler.ts standalone.ts
+tests/        core.test.ts alerts.test.ts server.test.ts
+```
+
+## 12. Tests (`npm test`, node's runner via vitest)
+
+Range bar clamp at both ends and the zone edges · session labels at DST boundaries and weekends ·
+alert crossing-only, no re-alert inside a zone, hysteresis, cooldown, queue, falling-knife hold ·
+buy arms sell and never auto-sells · PnL average cost, realised vs unrealised, undo restores
+exactly, cash never negative, whole-share rounding · target validation (`buy < sell`, positives,
+far-target warning) · voice parser (`140`, `92k`, `135-140`, symbol-only, junk) · quote fallback
+(mock, stale, sim override, allowlist 400) · layout: every rendered line ≤ 576 px measured with
+`pretext`, so a long symbol can never wrap the glasses UI.
+
+## 13. Demo script (90 s)
+
+1. Open the watchlist — three assets, bars, session chips, `●` freshness.
+2. Companion: `Drop NVDA −13 %` → G2 flashes `BUY ZONE HIT · NVDA @ $119.40`.
+3. Tap → `Bought 4 NVDA @ $119.40 · Undo 5s`, sell alert armed.
+4. Companion: `Spike NVDA +27 %` → sell-zone flash → tap → realised gain in the portfolio.
+5. Long-press: portfolio and journal, `Cash` never negative.
+6. `Force mock` → badges flip to `MOCK`; `Reset` → clean slate, ready for the next judge.
+
+## 14. Risks
+
+| Risk | Mitigation |
+|---|---|
+| Binance/Yahoo geo-blocked on demo day | mock fallback + `npm run probe` + `Force mock` |
+| Judges ask "is this real money?" | `PAPER` in the header, `(paper only)` on stops, README §PnL |
+| Font/glyph mismatch vs simulator | every line measured with `pretext`, banned-glyph list, verified on the sim |
+| Alert fires twice in one zone | crossing-only + hysteresis + 60 s cooldown, covered by tests |
+| Companion and glasses out of sync | all state on the server, single source of truth |
+
+## 15. Ponytail ledger
+
+Skipped: cloud STT, background push, TP ladder, heat strip, animations, G2 menus, event badges
+(§3).
+
+Not checked here: **live** Binance/Yahoo responses and **on-glasses** rendering — both networks
+are unreachable from this sandbox and I have no hardware. The live path is written against the
+documented response shapes and exercised with stubbed responses in `tests/server.test.ts`; the
+framing is verified against `pretext`'s firmware-calibrated metrics and the SDK's own page
+validator, not against a photo of the hardware.
+
+Risk: if either upstream changes shape, rows fall back to `STALE`/`MOCK` with the badge visible
+rather than showing a wrong number. Risk: real G2 text may wrap a line this plan thinks fits;
+`MAX_CHARS` and the measured test are the guard, and the first hardware run should re-check
+`tests/layout.test.ts` widths.
+
+## 16. Build order
+
+- [x] Analysis + plan + ponytail rules vendored (`AGENTS.md`, MIT)
+- [x] Scaffold: `package.json`, `tsconfig`, `vite.config.ts`, `app.json`, pages
+- [x] Core: quotes / session / targets / alerts / paper / voice
+- [x] Server: sources, store, handler, standalone
+- [x] G2 view: frame, sdk, browser mirror
+- [x] Companion (Judge Mode)
+- [x] 63 tests green · `tsc` clean · `vite build` clean · dev server verified · `evenhub pack` verified
+- [x] README
+
+### What the build changed in this plan (found by writing it)
+
+1. **Cooldown is per zone, not per symbol.** A per-symbol 60 s cooldown suppressed the
+   sell alert 10 s after a buy fill — the demo's money shot. Found by `tests/app.test.ts`.
+2. **`held` counting had to survive a suppressed crossing.** The falling-knife rule needed a
+   `pending` flag; without it the second poll saw "same zone" and returned early.
+3. **Auto-arm turned out to be zero code.** The first draft armed a sell flag and started a
+   cooldown; both were bugs. `holds` in the sell rule does the whole job.
+4. **The flash must be pushed on the poll, not on the next gesture** — the glasses would
+   otherwise show the alert only after a tap.
+5. **A 5% budget on a small book buys zero whole shares.** Plan clamps to one affordable share
+   instead of failing the tap.
+6. **Cents on a target are noise**: `BUY 118-122` replaced `118.00-122.00`, which also freed the
+   width for a right-aligned layout.

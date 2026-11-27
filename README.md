@@ -1,1 +1,156 @@
-# TargetGlance-
+# TargetGlance
+
+**Glanceable buy-zone / sell-zone alerts for stocks + crypto on Even Realities G2.**
+Set an entry and an exit zone, read a live range bar in half a second, paper-trade with one tap.
+No broker or exchange API keys, no accounts, no real orders.
+
+Track 03 — Exchanges & Stocks · 576×288 · Even G2
+
+```
+TARGETGLANCE  PAPER $10,316   +$316 open                              ALL
+>NVDA  ▲+4.2%  151.20  ● AH                             SELL 148-152 NOW
+   buy 118-122   hold 10 +$318
+ SOL   ▼-2.1%  139.40  ● 24-7                             BUY 135-140 NOW
+   buy 135-140   hold 5 -$2
+ BTC   ▲+0.8%  97k     ◌ 24-7                     ───●──── 105k
+   buy 92k
+
+SWIPE select   TAP edit   LONG portfolio
+```
+
+---
+
+## Run it (10 seconds)
+
+```bash
+npm i
+npm run dev          # http://localhost:5173  → the G2 app
+```
+
+Open **http://localhost:5173/companion.html** for Judge Mode (simulate a dip, force mock data,
+seed a portfolio, reset). Everything is one process on one port: the app and its quote service
+share an origin, so there is no CORS and no second terminal.
+
+```bash
+npm test             # 63 tests: alerts, PnL, parser, API, layout
+npm run probe        # can this machine reach Binance and Yahoo right now?
+npm run proxy        # OPTIONAL: same quote service on :8787 if you want it separate
+npm run pack         # build + evenhub pack → targetglance.ehpk
+```
+
+### In the Even Hub simulator
+
+```bash
+npx @evenrealities/evenhub-simulator http://localhost:5173
+```
+
+### On the glasses
+
+`npm run pack` produces `targetglance.ehpk`, which `evenhub create` / `evenhub upload` accepts.
+The packaged app needs a hosted copy of `dist/` (the dev server URL works on the same Wi-Fi).
+Set that host in `app.json` → `permissions[0].whitelist` before packing — the G2 network
+permission is a host whitelist, so an unlisted host fails silently.
+
+---
+
+## What it does
+
+| Screen | Content |
+|---|---|
+| **Watchlist** | 3 assets, price, day move, session chip, freshness dot, distance-to-sell bar. Header shows paper equity and open PnL. |
+| **Alert flash** | One line naming the zone, the price and the target; one paper order with its cost and share of cash; a single primary action. |
+| **Editor** | Buy zone, sell zone, stop, held. Swipe to adjust, tap to change field, long-press to save. |
+| **Portfolio** | Positions, average cost, unrealised PnL, cash and realised PnL. |
+| **Journal** | Last 5 trades with side, quantity, fill, realised PnL and time. |
+
+**Gestures:** swipe up/down select · tap open/confirm · double-tap back (or cycle the
+`ALL/STOCKS/CRYPTO` filter on the watchlist) · long-press portfolio, then journal.
+On a laptop the same gestures are `↑ ↓ Enter Esc L`.
+
+### The two ideas that make it more than a ticker
+
+1. **Zones, not points.** `BUY 118-122` is a decision; `BUY 118.00` is a hope.
+2. **The buy→sell loop is automatic.** Buy-zone alerts fire while you are flat, sell-zone
+   alerts fire while you hold. After a paper buy the sell alert is armed by definition —
+   there is no "armed" flag to desync, and nothing ever sells without an explicit tap.
+
+### Honesty features (they matter to judges)
+
+- `LIVE / DELAYED / STALE / MOCK` on every row, with the age of the tick.
+- `LIVE / PRE / AH / CLOSED / 24-7` per asset, DST-correct for New York.
+- `PAPER` in the header, `(paper only)` on stops, and every fill in the journal.
+- Alerts are **in-session**: they fire while the app is open, plus the Judge Mode trigger.
+  Even G2 background notification delivery is not used or claimed here.
+
+---
+
+## Paper trading rules
+
+- Start with **$10,000**. Cash can never go negative.
+- Orders size to **5% of available cash**; if 5% is less than one share, one affordable share.
+  Stocks round down to whole shares; crypto keeps 6 decimals.
+- Buy fills at the live price when you tap, not at the target.
+- Average cost per symbol; realised PnL on sell, unrealised on hold; total = cash + market value.
+- **Undo for 5 s** restores the book, the journal and the alert state exactly.
+
+## Alert rules
+
+- Crossings only. Sitting in a zone never re-alerts.
+- Hysteresis: leaving a zone needs a 0.25% move past its edge, so the boundary cannot flicker.
+- 60 s cooldown **per zone** (a buy→sell crossing is news, not a repeat).
+- On a wild day (≥ 7%), the price must hold in the zone for a second poll.
+- One flash on screen; up to 3 queued. Swipe = snooze for an hour.
+- Never a sell alert on a flat book.
+
+## Data
+
+```
+GET /api/quotes?symbols=NVDA,SOL
+[{ "symbol":"NVDA","price":138.2,"prevClose":132.6,"changePct":4.23,
+   "session":"AH","source":"yahoo","stale":false,"mock":false,"ts":"…" }]
+```
+
+Crypto comes from Binance (quoted in USDT, shown as `≈$`), stocks from Yahoo's public chart
+endpoint. 10 s cache; failures fall back to the last known price (`stale`) and then to a
+deterministic mock (`mock`) — the badge always says which. Symbols are allowlisted in
+`src/core/symbols.ts`; anything else is a 400.
+
+State (`targets`, `book`, `alerts`, `trades`, `watchlist`) lives on the server behind
+`GET/PUT /api/state/:key`, with `localStorage` as an offline cache. The phone and the glasses
+are different storage origins on real hardware, so a shared server is what actually keeps them
+in sync.
+
+---
+
+## Layout is measured, not guessed
+
+The G2 font is proportional and a fullwidth glyph (`─ ● █`) is exactly 20 px, so 576 px holds
+**28.8 characters** — box-drawing frames wrap and shred the layout. Every line is built by
+`src/g2/frame.ts` and checked in `tests/layout.test.ts` with `@evenrealities/pretext`, the same
+library calibrated against the firmware. That test also asserts the app never draws a glyph the
+firmware lacks (`:`, `|`, `▪`, `↺`, `░` are missing at this weight) and that no screen exceeds
+10 lines at the firmware's 27 px line height.
+
+## Layout of the code
+
+```
+src/core/     pure logic, no DOM and no SDK — the tested part
+              quotes · session · targets · alerts · paper · voice
+src/g2/       frame (all 5 screens as strings) · sdk (one text container) · main (controller) · mirror
+src/server/   quotes (sources, cache, fallback) · store · handler (framework-free router) · standalone
+tests/        core · alerts · paper · server · app (controller lifecycle) · layout
+```
+
+`npm run proxy` and the dev server mount the **same** `src/server/handler.ts`, so there is one
+implementation of the API and two hosts.
+
+## What is deliberately not here
+
+Cloud speech-to-text (needs a key or a Whisper install — the regex parser is wired to the
+companion's text box and is ready for any STT), background push alerts, take-profit ladders,
+sparklines, event badges, G2 contextual menus. Details and reasons: `PLAN.md` §3.
+
+## Credits
+
+Rules in `AGENTS.md` are [ponytail](https://github.com/DietrichGebert/ponytail) by Dietrich
+Gebert (MIT, see `PONYTAIL-LICENSE`).
