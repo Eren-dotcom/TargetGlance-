@@ -6,6 +6,7 @@ import { defaultTargets } from '../src/core/targets.ts';
 import { bar, rungMarks } from '../src/g2/bar.ts';
 import { BOLD, NORMAL, hardwareFrame, looksUrgent } from '../src/g2/look.ts';
 import { mockCandles } from '../src/core/candles.ts';
+import { windowOf } from '../src/g2/frame.ts';
 import { textSpark } from '../src/g2/bar.ts';
 
 /**
@@ -55,6 +56,25 @@ const withChart = (s: ViewState): ViewState => ({
     candles: mockCandles('NVDA', 138.2, 78),
     spark: textSpark(mockCandles('NVDA', 138.2, 78).map((c) => c.c), 32),
   },
+});
+
+describe('row window', () => {
+  const all = ['A', 'B', 'C', 'D', 'E', 'F'];
+  it('always contains the selected row', () => {
+    for (let sel = 0; sel < all.length; sel++) {
+      const w = windowOf(all, sel, 3);
+      expect(w, `sel ${sel}`).toContain(all[sel]);
+      expect(w).toHaveLength(3);
+    }
+  });
+
+  it('does not slide past the ends and keeps the order', () => {
+    expect(windowOf(all, 0, 3)).toEqual(['A', 'B', 'C']);
+    expect(windowOf(all, 5, 3)).toEqual(['D', 'E', 'F']);
+    expect(windowOf(all, 2, 3)).toEqual(['B', 'C', 'D']);
+    expect(windowOf(['A'], 0, 3)).toEqual(['A']);
+    expect(windowOf([], 0, 3)).toEqual([]);
+  });
 });
 
 describe('layout fits 576×288', () => {

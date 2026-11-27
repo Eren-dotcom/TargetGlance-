@@ -138,6 +138,13 @@ export const shortWhy = (reason?: string): string => {
   return 'mock';
 };
 
+/** The `n` rows around `sel`, clamped to the list, so the marked row is always visible. */
+export function windowOf<T>(all: T[], sel: number, n: number): T[] {
+  if (all.length <= n) return all;
+  const start = Math.max(0, Math.min(sel - Math.floor(n / 2), all.length - n));
+  return all.slice(start, start + n);
+}
+
 const pricesOf = (s: ViewState): Record<string, number> =>
   Object.fromEntries(s.quotes.map((q) => [q.symbol, q.price]));
 
@@ -145,7 +152,10 @@ function watch(s: ViewState): Line[] {
   const prices = pricesOf(s);
   const total = s.book.cash + marketValue(s.book, prices);
   const open = unrealized(s.book, prices);
-  const rows = visible(s).slice(0, 3);
+  // The selector can reach every symbol, so the three rows shown are a window around it:
+  // a `>` marker on a row that is not rendered is an edit aimed at nothing.
+  const all = visible(s);
+  const rows = windowOf(all, s.sel, 3);
   const lines: Line[] = [
     {
       text: spread(`TARGETGLANCE  PAPER ${money0(total)}   ${signedMoney(open)} open`, s.filter),
@@ -154,7 +164,8 @@ function watch(s: ViewState): Line[] {
     { text: '', level: 0 },
   ];
 
-  rows.forEach((sym, i) => {
+  rows.forEach((sym) => {
+    const i = all.indexOf(sym);
     const q = s.quotes.find((x) => x.symbol === sym);
     const t = s.targets[sym];
     if (!q || !t) return;

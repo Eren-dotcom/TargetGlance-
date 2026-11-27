@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { asAlerts, asBook, asTargetMap, asTrades, asWatchlist, validateWrite } from '../src/core/state.ts';
+import { asAlerts, asBook, asTargetMap, asTrades, asWatchlist, badTargets, validateWrite } from '../src/core/state.ts';
+import { PRESETS } from '../src/core/symbols.ts';
 import { START_CASH } from '../src/core/paper.ts';
 
 /**
@@ -69,5 +70,28 @@ describe('state hardening', () => {
     expect(validateWrite('watchlist', ['NVDA'])).toBeNull();
     expect(validateWrite('book', { cash: 100, positions: {} })).toBeNull();
     expect(validateWrite('nope', 1)).toContain('unknown');
+  });
+
+  it('accepts every preset whole, including the twelfth symbol', () => {
+    // The watchlist used to cap at 12 and the Megacap preset ends with RELIANCE.NS, so the
+    // preset could never be applied as listed.
+    for (const [name, symbols] of Object.entries(PRESETS)) {
+      expect(asWatchlist(symbols, []), name).toEqual(symbols);
+    }
+    expect(asWatchlist(['NVDA', 'NVDA', 'SOL'], [])).toEqual(['NVDA', 'SOL']);
+  });
+
+  it('refuses a target that is the right shape and the wrong content', () => {
+    // An object with a broken zone passes a typeof check and then renders a row nobody can draw.
+    expect(badTargets({ NVDA: { buy: 'nope' } })).toContain('NVDA');
+    expect(badTargets({ NVDA: { buy: { low: 1, high: 2 } } })).toContain('sell');
+    expect(badTargets({ NVDA: { buy: { low: 150, high: 160 }, sell: { low: 100, high: 120 }, stop: null } })).toContain(
+      'buy must sit below sell',
+    );
+    expect(badTargets({ NVDA: { buy: { low: 90, high: 95 }, sell: { low: 140, high: 150 }, stop: 'x' } })).toContain('stop');
+    expect(badTargets({ NVDA: { buy: { low: 90, high: 95 }, sell: { low: 140, high: 150 }, stop: null } })).toBeNull();
+    // Unknown symbols are dropped on read, so they are not an error here.
+    expect(badTargets({ EVIL: 42 })).toBeNull();
+    expect(validateWrite('targets', { NVDA: { buy: 'nope' } })).toContain('NVDA');
   });
 });

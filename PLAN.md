@@ -563,7 +563,36 @@ What shipped, with the key strictly optional:
 2. **A `reason` could have been cached as if it were a price.** It is stripped before the cache
    write, so a recovered provider does not keep apologising for an outage that ended.
 
-## 21. Build order
+## 21. Round six: the audit, and three ways the UI lied about itself
+
+No new feature this round. The rule was to find places where the app says something it does
+not do, which is worse than a missing feature because it survives a demo.
+
+1. **The selector walked off the screen.** The watchlist renders three rows but `sel` cycles
+   every symbol, so with six or more the `>` marker disappeared while tap-to-edit still acted
+   on the hidden row. Rows are now a window around the selection (`windowOf`), clamped at both
+   ends, and the editor reads the symbol from the same window.
+2. **The editor's footer said "TAP next" and tap never moved.** It stayed on row 0 and cycled
+   quick-sets, so **the sell zone and the stop could not be edited at all** by gesture — only
+   the buy zone was ever reachable. Tap now advances 0→1→2→3→0, swipe nudges the row in view,
+   double-tap applies the quick-set and persists it, hold saves. One implementation
+   (`editGesture`), tested for reachability of all four fields.
+3. **A `stop 110` phrase was parsed and thrown away.** The companion's apply spread
+   `{...base, ...(buy), ...(sell)}` and never merged `intent.stop`, so the parser was right and
+   the write path lost it.
+
+Also fixed:
+
+- **`validateWrite('targets')` only checked `typeof === 'object'`.** `{"NVDA":{"buy":"nope"}}`
+  was a 200, stored, and rendered a row whose zones cannot be drawn. `badTargets` now walks the
+  payload, skips unknown symbols (they are dropped on read anyway) and rejects a non-numeric
+  zone, an inverted zone, `buy >= sell`, a stop above the buy zone, and a non-numeric stop —
+  each with the symbol in the message.
+- **The watchlist capped at 12 but the universe has 13**, so the Megacap preset — which ends
+  with `RELIANCE.NS` — could never be applied whole. The cap is now the allowlist's own size,
+  which is the real bound, and a test asserts every preset round-trips.
+
+## 22. Build order
 
 - [x] Analysis + plan + ponytail rules vendored (`AGENTS.md`, MIT)
 - [x] Scaffold: `package.json`, `tsconfig`, `vite.config.ts`, `app.json`, pages
@@ -577,6 +606,8 @@ What shipped, with the key strictly optional:
 - [x] Round three: distinct mocks, sim at read time, SDK page validation, menu + temple hold
 - [x] Round three, part two: live mock run, keyed state load, trust boundary, API hardening
 - [x] 105 tests green · `tsc` clean · `vite build` clean · attack suite returns 422s
+- [x] Round six: selection window, editor reachability, stop merge, target content validation ·
+      146 tests
 - [x] Round five: optional live keys, classified failures, why-not-live on the row · 139 tests
 - [x] Round four: OHLC history, 288×144 candle bitmap, detail screen, text sparkline fallback,
       companion chart · 126 tests

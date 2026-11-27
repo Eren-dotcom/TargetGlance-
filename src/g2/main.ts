@@ -3,6 +3,7 @@ import { asAlerts, asBook, asTargetMap, asTrades, asWatchlist } from '../core/st
 import { defaultTargets, nudge, quickBuy, quickSell, quickSets, QUICK_STEPS, stepFor, validateTargets, type Targets } from '../core/targets.ts';
 import { freshAlertState, pollAlert, snooze, type Alert, type AlertMap } from '../core/alerts.ts';
 import { START_CASH, emptyBook, fmtQty, ladderFor, sizeQty, sell, buy, trancheQty, type Book, type Trade } from '../core/paper.ts';
+import { px } from '../core/format.ts';
 import { buildFrame, visibleSymbols, type Flash, type Filter, type ViewState, type ViewQuote } from './frame.ts';
 import { BOLD, NORMAL, hardwareFrame, looksUrgent } from './look.ts';
 import { hideChart, listen, render, showChart } from './sdk.ts';
@@ -93,7 +94,10 @@ export class App {
   undo: Snapshot | null = null;
   busy = false;
   mono = lookFromUrl();
-  /** Quick-set ladder index, so repeated taps cycle instead of resetting to the same place. */
+  /**
+   * Quick-set ladder index, shared by double-tap. Tap no longer cycles quick-sets — it moves
+   * between fields — so a deliberate double-tap is what applies one.
+   */
   quickIdx = 1;
   /**
    * Set by `load()`: the first poll after a wake-up records where each price is instead of
@@ -400,6 +404,50 @@ export class App {
     await showChart(this.bridge, map);
   }
 
+  /**
+   * Apply the next quick-set to the row the editor is on. `field` is the cursor the tap just
+   * moved, so a quick-set lands on the field the wearer is now looking at.
+   */
+  applyQuick(t: Targets, price?: number) {
+    if (this.field === 3) return; // the rung row is derived from the cost basis, not settable
+    this.quickIdx = (this.quickIdx + 1) % QUICK_STEPS.length;
+    const pct = QUICK_STEPS[this.quickIdx]!;
+    const at = price ?? (this.field === 0 ? t.buy.high : t.sell.low);
+    if (this.field === 0) t.buy = quickBuy(at, pct < 0 ? pct : -6);
+    else t.sell = quickSell(at, pct > 0 ? pct : 6);
+    this.say(`${this.field === 0 ? 'Buy' : 'Sell'} ${pct > 0 ? '+' : ''}${pct}% from ${price ? px(price) : 'price'}`, 2000);
+    const sym = this.rows()[this.sel];
+    if (sym) void this.saveTargets(sym);
+    return t;
+  }
+
+  /** Editor gestures: swipe nudges, tap advances, double-tap quick-sets, hold saves. */
+  async editGesture(g: Gesture) {
+    const rows = this.rows();
+    const sym = rows[this.sel];
+    if (!sym) return;
+    const t = this.targetFor(sym);
+    const q = this.quotes.find((x) => x.symbol === sym);
+    if (g === 'up' || g === 'down') {
+      const step = stepFor(q?.price ?? 100) * (g === 'up' ? -1 : 1);
+      if (this.field === 0) t.buy = nudge(t.buy, step);
+      else if (this.field === 1) t.sell = nudge(t.sell, step);
+      else if (this.field === 2)
+        t.stop = t.stop === null ? Math.round(t.buy.low * 0.9 * 100) / 100 : Math.max(0.01, Math.round((t.stop + step) * 100) / 100);
+      await this.draw();
+    } else if (g === 'click') {
+      this.field = (this.field + 1) % 4;
+      this.say(`${['buy zone', 'sell zone', 'stop', 'rungs'][this.field]}`, 1500);
+      await this.draw();
+    } else if (g === 'double') {
+      this.applyQuick(t, q?.price);
+      await this.draw();
+    } else if (g === 'long') {
+      await this.saveTargets(sym);
+      this.screen = 'watch';
+    }
+  }
+
   async openDetail() {
     const sym = this.rows()[this.sel];
     if (!sym) return;
@@ -454,40 +502,9 @@ export class App {
         else if (g === 'down' || g === 'up' || g === 'double') this.dismiss();
         break;
 
-      case 'edit': {
-        const sym = rows[this.sel];
-        if (!sym) break;
-        const t = this.targetFor(sym);
-        const q = this.quotes.find((x) => x.symbol === sym);
-        if (g === 'up' || g === 'down') {
-          const step = stepFor(q?.price ?? 100) * (g === 'up' ? -1 : 1);
-          if (this.field === 0) t.buy = nudge(t.buy, step);
-          else if (this.field === 1) t.sell = nudge(t.sell, step);
-          else if (this.field === 2)
-            t.stop = t.stop === null ? Math.round(t.buy.low * 0.9 * 100) / 100 : Math.max(0.01, Math.round((t.stop + step) * 100) / 100);
-          await this.draw();
-        } else if (g === 'click') {
-          // On a target row, a tap applies the next quick-set and stays on the row; the
-          // last row has nothing to quick-set, so a tap there wraps back to the buy zone.
-          if (this.field === 3) this.field = 0;
-          else {
-            this.quickIdx = (this.quickIdx + 1) % QUICK_STEPS.length;
-            const pct = QUICK_STEPS[this.quickIdx]!;
-            if (this.field === 0 && pct < 0) t.buy = quickBuy(q?.price ?? t.buy.high, pct);
-            else if (this.field === 1 && pct > 0) t.sell = quickSell(q?.price ?? t.sell.low, pct);
-            else {
-              if (this.field === 0) t.buy = quickBuy(q?.price ?? t.buy.high, -6);
-              else t.sell = quickSell(q?.price ?? t.sell.low, 6);
-            }
-            this.say(`${this.field === 0 ? 'Buy' : 'Sell'} ${pct > 0 ? '+' : ''}${pct}% from ${q ? q.price.toFixed(2) : 'price'}`);
-          }
-          await this.draw();
-        } else if (g === 'long') {
-          await this.saveTargets(sym);
-          this.screen = 'watch';
-        } else if (g === 'double') this.screen = 'watch';
+      case 'edit':
+        await this.editGesture(g);
         break;
-      }
 
       case 'detail':
         if (g === 'up' || g === 'down') await this.cycleRange();

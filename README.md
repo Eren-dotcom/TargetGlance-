@@ -35,7 +35,7 @@ seed a portfolio, reset). Everything is one process on one port: the app and its
 share an origin, so there is no CORS and no second terminal.
 
 ```bash
-npm test             # 139 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page,
+npm test             # 146 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page,
                      #   state trust boundary, candle bitmap — plus the 90 s demo, live, over HTTP
 npm run probe        # can this machine reach Binance and Yahoo right now?
 npm run proxy        # OPTIONAL: same quote service on :8787 if you want it separate
@@ -83,9 +83,9 @@ permission is a host whitelist, so an unlisted host fails silently.
 
 | Screen | Content |
 |---|---|
-| **Watchlist** | 3 assets, price, day move, session chip, freshness dot, distance-to-sell bar. Header shows paper equity and open PnL. |
+| **Watchlist** | 3 rows at a time, price, day move, session chip, freshness dot, distance-to-sell bar. The window follows the selection, so the `>` marker is always on screen even with 12 symbols. Header shows paper equity and open PnL. |
 | **Alert flash** | One line naming the zone (or rung, or stop), the price and the target; one paper order with its cost and share of cash; a single primary action. |
-| **Editor** | Buy zone, sell zone, stop, take-profit rungs. Swipe to adjust, **tap to quick-set** (cycles −10 / −6 / −4 / +4 / +6 / +10 % from the current price), long-press to save. |
+| **Editor** | Buy zone, sell zone, stop, take-profit rungs. Swipe adjusts the row, **tap moves to the next field** (all four are reachable — it used to stay on the buy row), **double-tap applies a quick-set** (−10 / −6 / −4 / +4 / +6 / +10 % from the current price), long-press saves. |
 | **Portfolio** | Positions, average cost, unrealised PnL, cash and realised PnL (says "flat" when every trade is closed). |
 | **Journal** | Last 5 trades with side, quantity, fill, realised PnL and time. |
 | **Chart / detail** | Price, day move, session, your zones, stop, position and ladder with a 288×144 candle chart below them; swipe cycles 1D / 5D / 1M. |
@@ -153,7 +153,9 @@ Per-row shading is not a thing on this hardware, and the preview reflects that.
 - One flash on screen; up to 3 queued. Swipe = snooze for an hour.
 - Never a sell or stop alert on a flat book, and never a countdown to a trade of zero.
 - Saved state is parsed at the edge (`src/core/state.ts`): a malformed value falls back instead
-  of blanking the glasses. `PUT` rejects prototype keys, over-deep JSON, an unknown session or a
+  of blanking the glasses, and a target that is the right *shape* but the wrong *content* — an
+  inverted zone, a stop above the buy zone, a zone that is not a number — is refused with a
+  message naming the symbol (`422`), not stored and drawn. `PUT` rejects prototype keys, over-deep JSON, an unknown session or a
   simulation beyond ±90% with a **422**.
 
 ## The chart (the "more detail" view)

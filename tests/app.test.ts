@@ -132,6 +132,63 @@ describe('app wiring', () => {
     expect(app.flash!.qty).toBe(1);
   });
 
+  it('keeps the marked row on screen when the selector walks past the third row', async () => {
+    const app = newApp();
+    app.watchlist = ['NVDA', 'SOL', 'BTC', 'ETH', 'XRP', 'DOGE'];
+    app.quotes = app.watchlist.map((s) => quote(s, 100, 1) as any);
+    app.targets = Object.fromEntries(
+      app.watchlist.map((s) => [s, { buy: { low: 90, high: 95 }, sell: { low: 140, high: 150 }, stop: null }]),
+    );
+    await app.poll();
+    for (let i = 0; i < 4; i++) await app.onGesture('down');
+    expect(app.sel).toBe(4);
+    // A `>` on a row that is not rendered would be an edit aimed at nothing.
+    const marked = app.frame().lines.filter((l) => l.text.startsWith('>'));
+    expect(marked).toHaveLength(1);
+    expect(marked[0]!.text).toContain('XRP');
+  });
+
+  it('reaches every editor field with a tap, so the sell zone and stop are editable', async () => {
+    const app = newApp();
+    await app.poll();
+    await app.onGesture('click'); // open the editor
+    expect(app.screen).toBe('edit');
+    const seen = [app.field];
+    for (let i = 0; i < 4; i++) {
+      await app.onGesture('click');
+      seen.push(app.field);
+    }
+    expect(new Set(seen), 'tap used to stay on row 0 forever').toEqual(new Set([0, 1, 2, 3]));
+
+    // Move to the sell row and nudge it: the change must land on the sell zone.
+    while (app.field !== 1) await app.onGesture('click');
+    const before = { ...app.targets.NVDA!.sell };
+    await app.onGesture('up');
+    expect(app.targets.NVDA!.sell).not.toEqual(before);
+
+    // And the stop row can arm a stop that was off. (TS narrows `field` after the loop, so
+    // the row is read through the object the gesture writes, not the narrowed field.)
+    for (let i = 0; i < 4 && (app.field as number) !== 2; i++) await app.onGesture('click');
+    expect(app.field).toBe(2);
+    const stopBefore = app.targets.NVDA!.stop;
+    await app.onGesture('down');
+    expect(app.targets.NVDA!.stop).not.toBe(stopBefore);
+    expect(Number(app.targets.NVDA!.stop)).toBeGreaterThan(0);
+  });
+
+  it('applies a quick-set on double-tap and only to the field in view', async () => {
+    const app = newApp();
+    await app.poll();
+    await app.onGesture('click');
+    const buyBefore = { ...app.targets.NVDA!.buy };
+    const sellBefore = { ...app.targets.NVDA!.sell };
+    await app.onGesture('double');
+    expect(app.targets.NVDA!.buy).not.toEqual(buyBefore);
+    expect(app.targets.NVDA!.sell).toEqual(sellBefore);
+    // The gesture is deliberate, so the quick-set is persisted, not just drawn.
+    expect(posts.targets).toBeTruthy();
+  });
+
   it('dismissing snoozes instead of trading', async () => {
     const app = newApp();
     feed = { NVDA: 92 };

@@ -1,6 +1,7 @@
 import { SYMBOLS, knownSymbols } from './symbols.ts';
 import type { AlertMap, AlertState } from './alerts.ts';
 import { freshAlertState } from './alerts.ts';
+import { validateTargets } from './targets.ts';
 import { START_CASH, type Book, type Trade } from './paper.ts';
 import type { Targets, Zone } from './targets.ts';
 
@@ -129,10 +130,14 @@ const safeKeys = (v: unknown): [string, unknown][] => {
   );
 };
 
-/** A watchlist is symbols we know, de-duplicated, capped at what one screen can page through. */
+/**
+ * A watchlist is symbols we know, de-duplicated, capped at the allowlist's own size — which
+ * is the real bound. It used to stop at 12, so the Megacap preset, which contains RELIANCE.NS
+ * as its twelfth entry, could never be applied whole.
+ */
 export function asWatchlist(v: unknown, fallback: string[]): string[] {
   if (!Array.isArray(v)) return fallback;
-  const clean = [...new Set(knownSymbols(v.filter((s): s is string => typeof s === 'string')))].slice(0, 12);
+  const clean = [...new Set(knownSymbols(v.filter((s): s is string => typeof s === 'string')))].slice(0, Object.keys(SYMBOLS).length);
   return clean.length ? clean : fallback;
 }
 
@@ -149,13 +154,36 @@ export function depthWithin(v: unknown, max = 8): boolean {
 }
 
 /** Used by the API to reject a bad write instead of storing it. Returns null when valid. */
+/**
+ * Shape checks alone are not enough: `{"NVDA":{"buy":"nope"}}` is an object, passes, and then
+ * makes the app render a row whose zones cannot be drawn. A bad target is rejected at the
+ * door with a message that says which symbol and what is wrong.
+ */
+export function badTargets(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return 'targets must be an object';
+  for (const [sym, t] of Object.entries(value as Record<string, unknown>)) {
+    if (!(sym in SYMBOLS)) continue; // unknown symbols are dropped on read, not an error
+    const v = t as Targets;
+    const zones = [v?.buy, v?.sell];
+    if (!zones.every((z) => z && Number.isFinite(z.low) && Number.isFinite(z.high))) {
+      return `${sym}: buy and sell must each have a numeric low and high`;
+    }
+    if (v.stop !== null && v.stop !== undefined && !Number.isFinite(Number(v.stop))) {
+      return `${sym}: stop must be a number or null`;
+    }
+    const problems = validateTargets(v, undefined);
+    if (problems.length) return `${sym}: ${problems[0]}`;
+  }
+  return null;
+}
+
 export function validateWrite(key: string, value: unknown): string | null {
   if (!depthWithin(value)) return 'value is too deeply nested, or contains a forbidden key';
   switch (key) {
     case 'watchlist':
       return Array.isArray(value) && value.length ? null : 'watchlist must be a non-empty array';
     case 'targets':
-      return typeof value === 'object' && value !== null && !Array.isArray(value) ? null : 'targets must be an object';
+      return badTargets(value);
     case 'book':
       return typeof value === 'object' && value !== null && num((value as Book).cash) !== null
         ? null

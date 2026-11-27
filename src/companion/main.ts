@@ -296,7 +296,13 @@ function wire() {
     const targets = state.targets as Record<string, Targets>;
     const price = quotes.find((q) => q.symbol === intent.symbol)?.price;
     const base = targets[intent.symbol] ?? defaultTargets(price ?? SYMBOLS[intent.symbol]!.mock);
-    const next = { ...base, ...(intent.buy ? { buy: intent.buy } : {}), ...(intent.sell ? { sell: intent.sell } : {}) };
+    // A `stop 110` phrase used to parse and then be thrown away by this spread.
+    const next = {
+      ...base,
+      ...(intent.buy ? { buy: intent.buy } : {}),
+      ...(intent.sell ? { sell: intent.sell } : {}),
+      ...(intent.stop !== undefined ? { stop: intent.stop } : {}),
+    };
     const problems = validateTargets(next as Targets, price);
     if (problems.length) {
       $('parseOut').textContent = `${describeIntent(intent)} — rejected: ${problems.join(', ')}`;
