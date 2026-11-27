@@ -1,13 +1,16 @@
 import { SYMBOLS, assetClass } from '../core/symbols.ts';
 import { sessionFor, type Session, type SessionOverride } from '../core/session.ts';
 import {
+  binanceKlines,
   binanceTicker,
   round,
   sessionFromMarketState,
   withSim,
+  yahooCandles,
   yahooTicker,
   type Quote,
 } from '../core/quotes.ts';
+import { RANGE_SPEC, mockCandles, normalizeCandles, type Candle, type History, type Range } from '../core/candles.ts';
 
 export interface JudgeState {
   mock: boolean;
@@ -150,3 +153,68 @@ export async function probe(): Promise<Record<string, string>> {
 }
 
 export const clearCache = () => cache.clear();
+
+/* ------------------------------------------------------------------ *
+ * History for the detail view. Same trust order as a quote: judge mock
+ * → cache → live → last known good → deterministic mock.
+ * ------------------------------------------------------------------ */
+
+const historyCache = new Map<string, { at: number; candles: Candle[]; source: History['source'] }>();
+export const HISTORY_CACHE_MS = 60_000;
+
+/** The live sources take their own range labels; ours are the three the glass offers. */
+const YAHOO_SPAN: Record<Range, string> = { '1D': '1d', '5D': '5d', '1M': '1mo' };
+
+export async function candlesFor(symbol: string, range: Range, now = new Date()): Promise<History> {
+  const spec = RANGE_SPEC[range];
+  // The chart's last bar must be the price on the row above it, sim included, or the
+  // detail view contradicts the watchlist.
+  const live = await quoteFor(symbol, now);
+  const endOn = (candles: Candle[]): Candle[] => {
+    const last = candles[candles.length - 1];
+    if (!last || !(live.price > 0)) return candles;
+    const c = { ...last, c: live.price, h: Math.max(last.h, live.price), l: Math.min(last.l, live.price) };
+    return [...candles.slice(0, -1), c];
+  };
+
+  if (judge.mock) {
+    return {
+      symbol,
+      range,
+      step: spec.interval,
+      source: 'mock',
+      mock: true,
+      candles: mockCandles(symbol, live.price, spec.bars, now.getTime(), live.prevClose),
+    };
+  }
+
+  const key = `${symbol}|${range}`;
+  const hit = historyCache.get(key);
+  if (hit && now.getTime() - hit.at < HISTORY_CACHE_MS) {
+    return { symbol, range, step: spec.interval, source: hit.source, mock: false, candles: endOn(hit.candles) };
+  }
+
+  const def = SYMBOLS[symbol]!;
+  try {
+    const raw =
+      def.class === 'crypto'
+        ? await binanceKlines(def.binance ?? symbol, spec.interval, spec.bars)
+        : await yahooCandles(def.yahoo ?? symbol, YAHOO_SPAN[range], spec.interval);
+    const candles = normalizeCandles(raw, spec.bars);
+    if (!candles.length) throw new Error('no bars');
+    historyCache.set(key, { at: now.getTime(), candles, source: def.class === 'crypto' ? 'binance' : 'yahoo' });
+    return { symbol, range, step: spec.interval, source: def.class === 'crypto' ? 'binance' : 'yahoo', mock: false, candles: endOn(candles) };
+  } catch {
+    if (hit) return { symbol, range, step: spec.interval, source: hit.source, mock: false, candles: endOn(hit.candles) };
+    return {
+      symbol,
+      range,
+      step: spec.interval,
+      source: 'mock',
+      mock: true,
+      candles: mockCandles(symbol, live.price, spec.bars, now.getTime(), live.prevClose),
+    };
+  }
+}
+
+export const clearHistoryCache = () => historyCache.clear();

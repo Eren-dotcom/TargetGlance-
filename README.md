@@ -35,8 +35,8 @@ seed a portfolio, reset). Everything is one process on one port: the app and its
 share an origin, so there is no CORS and no second terminal.
 
 ```bash
-npm test             # 105 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page,
-                     #   state trust boundary — plus the 90 s demo played against the live server
+npm test             # 126 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page,
+                     #   state trust boundary, candle bitmap — plus the 90 s demo, live, over HTTP
 npm run probe        # can this machine reach Binance and Yahoo right now?
 npm run proxy        # OPTIONAL: same quote service on :8787 if you want it separate
 npm run pack         # build + evenhub pack → targetglance.ehpk
@@ -66,13 +66,15 @@ permission is a host whitelist, so an unlisted host fails silently.
 | **Editor** | Buy zone, sell zone, stop, take-profit rungs. Swipe to adjust, **tap to quick-set** (cycles −10 / −6 / −4 / +4 / +6 / +10 % from the current price), long-press to save. |
 | **Portfolio** | Positions, average cost, unrealised PnL, cash and realised PnL (says "flat" when every trade is closed). |
 | **Journal** | Last 5 trades with side, quantity, fill, realised PnL and time. |
+| **Chart / detail** | Price, day move, session, your zones, stop, position and ladder with a 288×144 candle chart below them; swipe cycles 1D / 5D / 1M. |
 
-**Gestures:** swipe up/down select · tap open/confirm · double-tap back (or cycle the
-`ALL/STOCKS/CRYPTO` filter on the watchlist) · long-press portfolio, then journal.
+**Gestures:** swipe up/down select (or change the chart's range on the detail screen) · tap
+open/confirm · double-tap back (or cycle the `ALL/STOCKS/CRYPTO` filter on the watchlist) ·
+long-press opens the **chart**, and on the chart it jumps into target editing.
 On a laptop the same gestures are `↑ ↓ Enter Esc L`.
 
-**Contextual menu** on the glasses: `Portfolio` · `Journal` · `Reset view` (the long-press
-shortcut). **Temple hold** opens the mic and shows what to say; speech-to-text is not in this
+**Contextual menu** on the glasses: `Chart` · `Portfolio` · `Journal` · `Reset view` — the
+long-press shortcut lives in the menu, because the gesture itself is now the chart. **Temple hold** opens the mic and shows what to say; speech-to-text is not in this
 build, so the phrase box in Judge Mode does the parsing.
 
 **Emphasis on glass is one step:** the container is drawn at the default brightness normally and
@@ -131,12 +133,65 @@ Per-row shading is not a thing on this hardware, and the preview reflects that.
   of blanking the glasses. `PUT` rejects prototype keys, over-deep JSON, an unknown session or a
   simulation beyond ±90% with a **422**.
 
+## The chart (the "more detail" view)
+
+Long-press a row, or pick **Chart** in the menu, and the glasses open a detail screen: price,
+day move, session, your zones, the stop, the position and its ladder — plus a candle chart.
+
+**Why it is an image and not a text grid.** The G2 font is proportional. I measured it: `█`,
+`│`, `●`, `▲` are a hard 20 px, but `▓`, `░`, `▐`, `╎` are 4 px. A character-cell candle grid
+therefore *drifts* on real glass — the columns stop lining up after a few rows. So the chart is
+a bitmap in the firmware's image container, and the container is capped at **288×144**: exactly
+a quarter of the 576×288 display. The chart sits bottom-right at 1× and the text above it is
+its own legend, so no ink ever lands under a number.
+
+What is drawn, in ink levels rather than colour:
+
+- **Candles**, 78 bars for `1D` (5-minute), 65 for `5D` (30-minute), 22 for `1M` (daily).
+  Wick = low..high, body = open..close. Closed down is solid, closed up is hollow, so
+  direction survives a display with one ink colour.
+- **Your zones** as dotted bands (buy below, sell above) and the **stop** as a finer rule.
+  A zone near the price is pulled into the window, because "is my buy zone realistic?" is the
+  question this app exists to answer. A zone far outside is *pinned to the edge and left
+  dotted*, not stretched into the frame — an edge line means "off this window", never "the
+  price is here".
+- **Last price** as a full-width solid rule.
+
+**History costs no key.** Stocks use the same Yahoo chart endpoint as the quotes
+(`range=1d|5d|1mo`), crypto uses Binance `klines`. Both are the hosts already whitelisted for
+quotes. The last bar is *overwritten with the live quote* (sim included), so the chart can never
+contradict the row above it. 60 s cache; on failure the last good bars, then a deterministic
+mock — the caption says `mock` when that happens.
+
+**The fallback is text.** If the firmware rejects the image container, nothing breaks: the same
+screen carries a 32-column sparkline drawn in eight block glyphs (`▁▂▃▄▅▆▇█`, all 20 px), so
+"more detail" never depends on a bitmap. `tests/chart.test.ts` pins the pixel contract: one
+byte per pixel of 288×144, never an empty chart, exactly one full-width ink row (the price),
+zone bands dotted rather than solid.
+
+Gestures on the detail screen: **swipe** cycles 1D → 5D → 1M, **tap** back to the watchlist,
+**hold** straight into target editing. Judge Mode gets the same bytes at 3× so a zone can be
+judged on a laptop before it is trusted on glass.
+
+![the candle chart as the image container receives it](artifacts/chart-detail.png)
+
+*The exact 288×144 byte map, drawn 3×. `NVDA` at 121.28 against `buy 118-122` (tinted, dashed
+edges), `sell 148-152` (above the window, so one dashed marker row at the top rather than a
+band where the price is not), stop 110 below it. The solid line is the last price; solid bodies
+closed down, hollow closed up.*
+
 ## Data
 
 ```
 GET /api/quotes?symbols=NVDA,SOL
 [{ "symbol":"NVDA","price":138.2,"prevClose":132.6,"changePct":4.23,
    "session":"AH","source":"yahoo","stale":false,"mock":false,"ts":"…" }]
+```
+
+```
+GET /api/candles?symbols=NVDA&range=1D        range ∈ 1D, 5D, 1M
+[{ "symbol":"NVDA","range":"1D","step":"5m","source":"yahoo","mock":false,
+   "candles":[{ "t":1795756660769,"o":114.32,"h":114.51,"l":114.32,"c":114.41 }, …] }]
 ```
 
 Crypto comes from Binance (quoted in USDT, shown as `≈$`), stocks from Yahoo's public chart

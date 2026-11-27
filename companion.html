@@ -63,6 +63,22 @@
       </section>
 
       <section>
+        <h2>CHART — WHAT THE GLASSES SEE, FULL SIZE</h2>
+        <div class="row">
+          <select id="chartSym"></select>
+          <button id="r1D" class="on">1D</button>
+          <button id="r5D">5D</button>
+          <button id="r1M">1M</button>
+          <span id="chartMeta" class="dim">…</span>
+        </div>
+        <canvas id="chart" width="864" height="432" style="width:100%;max-width:864px;image-rendering:pixelated;background:#05100a;border:1px solid #12241b;border-radius:6px"></canvas>
+        <div class="row dim" style="margin-top:6px;font-size:11px">
+          Same 288×144 bytes the glasses' image container receives, drawn 3× with the zone bands and the
+          last-price line. The watch row's text sparkline is the fallback when the bitmap cannot be pushed.
+        </div>
+      </section>
+
+      <section>
         <h2>SIMULATE (the demo never waits for the market)</h2>
         <div class="row" id="sim"></div>
         <div class="row">

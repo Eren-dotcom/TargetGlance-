@@ -341,7 +341,9 @@ Range bar clamp at both ends and the zone edges · session labels at DST boundar
 alert crossing-only, no re-alert inside a zone, hysteresis, cooldown, queue, falling-knife hold ·
 buy arms sell and never auto-sells · PnL average cost, realised vs unrealised, undo restores
 exactly, cash never negative, whole-share rounding · target validation (`buy < sell`, positives,
-far-target warning) · state trust boundary (junk, prototype keys, deep nesting, unknown symbols
+far-target warning) · candle bitmap pixel contract (one byte per pixel, never empty, only the
+price line spans the frame, out-of-window zones stay off the edge) · history parsers reject
+null bars and bodies outside their wick · state trust boundary (junk, prototype keys, deep nesting, unknown symbols
 dropped) · mock run over real HTTP · voice parser (`140`, `92k`, `135-140`, symbol-only, junk) · quote fallback
 (mock, stale, sim override, allowlist 400) · layout: every rendered line ≤ 576 px measured with
 `pretext`, so a long symbol can never wrap the glasses UI.
@@ -467,7 +469,64 @@ a key-shape regex, a depth cap of 8, `session` restricted to the five real sessi
 simulation banded to ±90% (`MAX_SIM_PCT`), because a 1e308 multiple is not a market move, it is
 a way to overflow the display. All of it returns **422**, and the legitimate writes still 200.
 
-## 19. Build order
+## 19. Round four: the chart, and why it cannot be text
+
+The request was "a graph and candles if the user wants more detail". The honest answer
+started with a measurement, because the obvious implementation is wrong on this hardware.
+
+**The font is proportional.** `getTextWidth` from `@evenrealities/pretext`: `█`, `│`, `●`,
+`▲`, `─` are a hard **20 px**, but `▓`, `░`, `▐`, `╎`, `║`, `▀` are **4 px**. A candle drawn
+as a character grid therefore drifts — column 1 lines up, column 12 does not — and this is
+invisible in a monospace browser preview, which is exactly how a chart would ship broken.
+
+**The image container is 288×144.** The SDK declares width `20..288`, height `20..144`, max
+four image containers, `imageData` as grayscale bytes (LZ4'd by the SDK). That is exactly a
+quarter of 576×288, so the chart goes bottom-right at 1× and the text above it is its legend.
+A 576-wide image is not offered, so "full-width chart" is not a thing this firmware does.
+
+What shipped:
+
+- `src/core/candles.ts` — `Candle`, `Range` (`1D|5D|1M`), `RANGE_SPEC`, `isCandle`,
+  `normalizeCandles`, `extent`, `mockCandles`, `zoneHits`. A bar is only a bar if prices are
+  positive and the body sits inside its own wick — Yahoo pads holidays with nulls.
+- `src/core/quotes.ts` — `binanceKlines`, `yahooCandles`. Same hosts as the quotes, so no new
+  permission and no key.
+- `src/server/quotes.ts` — `candlesFor` with the quote's trust order (judge mock → 60 s cache
+  → live → last good → deterministic mock), and the **last bar overwritten with the live
+  quote** so the chart never contradicts the row above it.
+- `src/g2/chart.ts` — `renderCandles` (pure), `chartWindow`, `toImageData`, `ascii`.
+- `src/g2/sdk.ts` — `showChart`/`hideChart`: one `rebuildPageContainer` per session to mount
+  the image container (carrying the menu over, or it would be cleared), then a cheap
+  `updateImageRawData` per frame. A rejection is not fatal.
+- `src/g2/bar.ts` — `textSpark`: the fallback, eight 20 px block glyphs.
+- `src/g2/mirror.ts` — paints the same bytes into a canvas at the same position, so the
+  preview cannot show a chart the glass would not draw.
+- `companion.html` — the same map at 3×, with range buttons, for judging a zone on a laptop.
+
+### Defects this round found
+
+1. **`chartView()` recursed into `rows()` → `view()` → `chartView()`** and blew the stack on
+   the first poll. Caught by the mock run, not by the unit tests.
+2. **A 1 px overflow** in the detail legend (`...high 138.82` measured 577 px). Caught by the
+   existing `layout.test.ts`, which is why that test measures instead of asserting text.
+3. **A body outside its own wick passed validation**, so a bad vendor bar could draw a candle
+   that could never have traded. `isCandle` now requires `l <= o,c <= h`.
+4. **Zone bands drew at the frame edge** when a target was far outside the window, which reads
+   as "the price is here". An out-of-window target now gets one dashed marker row two pixels
+   inside the frame and no interior at all.
+5. **A 50%-duty dash on every row became vertical hatching.** Measured after rendering the real
+   bitmap: rows 7–80 carried ~130 of 144 columns of dots, which reads as a solid green wall and
+   buries the candles. A zone interior is now a one-pixel-in-four screen-door tint and its edges
+   are dashed rules, verified by counting ink per row in `tests/chart.test.ts`.
+6. **The mock walk drifted**, so a 1D window looked like a five-day trend and the buy zone
+   covered half the chart. The walk is now mean-reverting *and* bridged between two pinned
+   ends: bar 0 opens at the previous close and the last bar closes on the live price, so the
+   chart's own % move equals the day change on the row above it.
+7. **`mockCandles` had no previous close to anchor on.** Found while fixing 6: the server had
+   the quote's `prevClose` in hand and never passed it, so the chart and the header could state
+   different day moves.
+
+## 20. Build order
 
 - [x] Analysis + plan + ponytail rules vendored (`AGENTS.md`, MIT)
 - [x] Scaffold: `package.json`, `tsconfig`, `vite.config.ts`, `app.json`, pages
@@ -481,6 +540,8 @@ a way to overflow the display. All of it returns **422**, and the legitimate wri
 - [x] Round three: distinct mocks, sim at read time, SDK page validation, menu + temple hold
 - [x] Round three, part two: live mock run, keyed state load, trust boundary, API hardening
 - [x] 105 tests green · `tsc` clean · `vite build` clean · attack suite returns 422s
+- [x] Round four: OHLC history, 288×144 candle bitmap, detail screen, text sparkline fallback,
+      companion chart · 126 tests
 
 ### What the build changed in this plan (found by writing it)
 

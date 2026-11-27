@@ -179,13 +179,16 @@ describe('app wiring', () => {
     expect(posts.targets).toBeTruthy();
   });
 
-  it('long-press opens the portfolio, then the journal', async () => {
+  it('long-press opens the chart, and the menu still reaches the portfolio then the journal', async () => {
     const app = newApp();
     app.book = buy(emptyBook(START_CASH), 'NVDA', 2, 90, 'zone', new Date()).book;
     await app.poll();
+    // Long-press is the fastest path to "more detail"; Portfolio/Journal sit in the menu.
     await app.onGesture('long');
+    expect(app.screen).toBe('detail');
+    await app.onMenu('portfolio');
     expect(app.screen).toBe('portfolio');
-    await app.onGesture('long');
+    await app.onMenu('journal');
     expect(app.screen).toBe('journal');
   });
 

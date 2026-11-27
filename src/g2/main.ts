@@ -5,7 +5,11 @@ import { freshAlertState, pollAlert, snooze, type Alert, type AlertMap } from '.
 import { START_CASH, emptyBook, fmtQty, ladderFor, sizeQty, sell, buy, trancheQty, type Book, type Trade } from '../core/paper.ts';
 import { buildFrame, visibleSymbols, type Flash, type Filter, type ViewState, type ViewQuote } from './frame.ts';
 import { BOLD, NORMAL, hardwareFrame, looksUrgent } from './look.ts';
-import { connect, listen, render, type Gesture, type MenuAction } from './sdk.ts';
+import { hideChart, listen, render, showChart } from './sdk.ts';
+import { connect, type Gesture, type MenuAction } from './sdk.ts';
+import { renderCandles, type ChartMap } from './chart.ts';
+import { nextRange, type Candle, type History, type Range } from '../core/candles.ts';
+import { textSpark } from './bar.ts';
 import { mountMirror } from './mirror.ts';
 
 const POLL_MS = 5000;
@@ -80,6 +84,10 @@ export class App {
   toastUntil = 0;
   screen: ViewState['screen'] = 'watch';
   filter: Filter = 'ALL';
+  /** Detail view: the range the wearer last chose, kept across symbols. */
+  range: Range = '1D';
+  /** Cached history for the symbol on screen; a range change refetches. */
+  history: History | null = null;
   sel = 0;
   field = 0;
   undo: Snapshot | null = null;
@@ -104,7 +112,7 @@ export class App {
     }).catch(() => null);
     // Keys drive the glasses gestures when no simulator is attached.
     try {
-      mountMirror(() => this.frame(), this.mirrorHost(), (g) => void this.onGesture(g));
+      mountMirror(() => this.frame(), this.mirrorHost(), (g) => void this.onGesture(g), () => this.chartMap());
     } catch {
       // No #glass in the host page: the glasses are the only display, which is fine.
     }
@@ -334,11 +342,83 @@ export class App {
       sel: this.sel,
       field: this.field,
       flash: this.flash,
+      chart: this.chartView(),
       toast: this.toast,
       trades: this.trades.map(({ symbol, side, qty, price, pnl, ts }) => ({ symbol, side, qty, price, pnl, ts })),
       now: Date.now(),
       mono: this.mono,
     };
+  }
+
+  /**
+   * What the detail screen draws; empty until the first history arrives. Never call
+   * `rows()` from here — the view builds rows, so that would recurse until the stack dies.
+   */
+  chartView(): ViewState['chart'] {
+    const h = this.history;
+    if (!h || this.screen !== 'detail') return null;
+    return {
+      range: h.range,
+      step: h.step,
+      candles: h.candles,
+      mock: h.mock,
+      spark: textSpark(h.candles.map((c: Candle) => c.c), 32),
+    };
+  }
+
+  async loadHistory() {
+    const sym = this.rows()[this.sel];
+    if (!sym) return;
+    try {
+      const r = await fetch(`/api/candles?symbols=${encodeURIComponent(sym)}&range=${this.range}`);
+      if (!r.ok) throw new Error(String(r.status));
+      const [h] = (await r.json()) as History[];
+      if (h && Array.isArray(h.candles)) this.history = h;
+    } catch {
+      // No history is a missing chart, not a broken screen: the detail view drops the
+      // sparkline and says so, and the watchlist keeps working.
+      this.history = null;
+    }
+  }
+
+  /** The bitmap for the current detail view; null when there is nothing to chart. */
+  chartMap(): ChartMap | null {
+    const h = this.history;
+    if (!h || this.screen !== 'detail' || !h.candles.length) return null;
+    return renderCandles({
+      candles: h.candles,
+      price: this.quotes.find((q) => q.symbol === h.symbol)?.price,
+      targets: this.targets[h.symbol] ?? null,
+      range: h.range,
+    });
+  }
+
+  /** Push that bitmap to the image container, when the firmware accepted one. */
+  async drawChart() {
+    const map = this.chartMap();
+    if (!this.bridge || !map) return;
+    await showChart(this.bridge, map);
+  }
+
+  async openDetail() {
+    const sym = this.rows()[this.sel];
+    if (!sym) return;
+    this.screen = 'detail';
+    this.history = null;
+    await this.draw();
+    await this.loadHistory();
+    await this.draw();
+  }
+
+  async closeDetail() {
+    this.screen = 'watch';
+    if (this.bridge) await hideChart(this.bridge);
+  }
+
+  async cycleRange() {
+    this.range = nextRange(this.range);
+    await this.loadHistory();
+    await this.draw();
   }
 
   frame() {
@@ -350,6 +430,7 @@ export class App {
     const f = this.frame();
     // Brightness is a whole-container property, so it marks the moment, not a row.
     if (this.bridge) await render(this.bridge, f, looksUrgent(f) ? BOLD : NORMAL);
+    await this.drawChart();
   }
 
   async tick() {
@@ -408,6 +489,16 @@ export class App {
         break;
       }
 
+      case 'detail':
+        if (g === 'up' || g === 'down') await this.cycleRange();
+        else if (g === 'long') {
+          const sym = this.rows()[this.sel];
+          if (sym) this.targets[sym] ??= defaultTargets(this.quotes.find((q) => q.symbol === sym)?.price ?? 100);
+          await this.closeDetail();
+          this.screen = 'edit';
+        } else await this.closeDetail();
+        break;
+
       case 'portfolio':
       case 'journal':
         if (g === 'long' && this.screen === 'portfolio') this.screen = 'journal';
@@ -430,7 +521,7 @@ export class App {
             this.screen = 'edit';
           }
         } else if (g === 'long') {
-          this.screen = 'portfolio';
+          await this.openDetail();
         } else if (g === 'double') {
           this.filter = this.filter === 'ALL' ? 'STOCKS' : this.filter === 'STOCKS' ? 'CRYPTO' : 'ALL';
           this.sel = 0;
@@ -442,6 +533,10 @@ export class App {
 
   /** Contextual menu: the same three things the gestures reach, one level less buried. */
   async onMenu(action: MenuAction) {
+    if (action === 'chart') {
+      await this.openDetail();
+      return;
+    }
     if (action === 'portfolio') this.screen = 'portfolio';
     else if (action === 'journal') this.screen = 'journal';
     else {

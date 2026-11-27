@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../src/g2/main.ts';
+import { renderCandles } from '../src/g2/chart.ts';
 
 /**
  * Mock run: the demo script, end to end, against the REAL server over HTTP.
@@ -99,22 +100,36 @@ describe.skipIf(!up)('mock run: the 90-second demo', () => {
     expect(left).toBeLessThan(qty);
     expect(app.trades[0]?.side).toBe('SELL');
 
-    // 5. Portfolio and journal screens render with real content.
+    // 5. The detail screen: real history over HTTP, a text sparkline, and the candle
+    // bitmap that would go into the image container.
     await app.onGesture('long');
+    snap('detail');
+    expect(app.screen).toBe('detail');
+    expect(app.history?.candles.length, 'no history came back from /api/candles').toBeGreaterThan(10);
+    expect(app.frame().text).toContain('DETAIL · NVDA');
+    const chart = renderCandles({ candles: app.history!.candles, price: 139.13, range: '1D', targets: app.targets.NVDA });
+    expect(chart.data.length).toBe(288 * 144);
+    expect(chart.data.some((b) => b > 0), 'the chart rendered empty').toBe(true);
+    // Swipe cycles the window; the label has to move with it.
+    await app.onGesture('up');
+    expect(app.history?.range).toBe('5D');
+
+    // 6. Portfolio and journal screens render with real content.
+    await app.onMenu('portfolio');
     expect(app.screen).toBe('portfolio');
     expect(app.frame().text).toContain('PAPER PORTFOLIO');
-    await app.onGesture('long');
+    await app.onMenu('journal');
     expect(app.screen).toBe('journal');
     expect(app.frame().text).toContain('TRADE LOG');
 
-    // 6. Undo the sale, after walking back to the watchlist.
+    // 7. Undo the sale, after walking back to the watchlist.
     await app.onGesture('click');
     expect(app.screen).toBe('watch');
     await app.undoLast();
     snap('undone');
     expect(app.book.positions.NVDA?.qty).toBe(qty);
 
-    // 7. Clear the sim: the price must return at once, not after the cache expires.
+    // 8. Clear the sim: the price must return at once, not after the cache expires.
     await judge({ sim: {} });
     await app.poll();
     snap('cleared');

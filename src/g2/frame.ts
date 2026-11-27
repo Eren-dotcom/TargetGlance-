@@ -5,12 +5,13 @@ import { fmtQty, ladderFor, marketValue, realizedTotal, unrealized, type Book } 
 import type { Session } from '../core/session.ts';
 import { ago, freshDot, money, money0, moveMark, pctText, px, signed, signedMoney, zoneText } from '../core/format.ts';
 import { bar, rungMarks } from './bar.ts';
+import { extent, stepLabel, type Candle, type Range } from '../core/candles.ts';
 
 
 export const W = 576;
 export const H = 288;
 
-export type Screen = 'watch' | 'flash' | 'edit' | 'portfolio' | 'journal';
+export type Screen = 'watch' | 'flash' | 'edit' | 'portfolio' | 'journal' | 'detail';
 export type Filter = 'ALL' | 'STOCKS' | 'CRYPTO';
 
 export interface ViewQuote {
@@ -41,6 +42,20 @@ export interface Flash {
   final?: boolean;
 }
 
+export interface ViewChart {
+  range: Range;
+  /** Interval the source returned: `5m`, `30m`, `1d`. */
+  step: string;
+  candles: Candle[];
+  mock: boolean;
+  /**
+   * Text fallback drawn on the glass itself: eight levels of block glyph, one per bar
+   * bucket. The bitmap in the image container is the real chart; this is what the wearer
+   * sees when the image path is unavailable, so the screen never depends on a bitmap.
+   */
+  spark: string;
+}
+
 export interface ViewTrade {
   symbol: string;
   side: 'BUY' | 'SELL';
@@ -61,6 +76,8 @@ export interface ViewState {
   /** Row index inside the editor. */
   field: number;
   flash: Flash | null;
+  /** Detail view: the chart for the selected symbol, when one has been fetched. */
+  chart?: ViewChart | null;
   /** `✓ Bought 4 NVDA @ $119.40 — Undo` for 5 s after a trade. */
   toast: string | null;
   trades: ViewTrade[];
@@ -152,7 +169,7 @@ function watch(s: ViewState): Line[] {
   if (!rows.length) lines.push({ text: 'No symbols in this filter', level: 2 });
 
   if (s.toast) lines.push({ text: '', level: 0 }, { text: clip(`✓ ${s.toast}`), level: 4, rule: true });
-  else lines.push({ text: '', level: 0 }, { text: clip('SWIPE select   TAP edit   LONG portfolio'), level: 1, rule: true });
+  else lines.push({ text: '', level: 0 }, { text: clip('SWIPE select   TAP edit   LONG chart'), level: 1, rule: true });
   return lines;
 }
 
@@ -204,6 +221,45 @@ function edit(s: ViewState): Line[] {
     { text: '', level: 0 },
     { text: clip('SWIPE -/+   TAP next   HOLD save + back'), level: 1, rule: true },
   ];
+}
+
+/**
+ * Detail: the numbers the watchlist compresses, plus the chart. The top 144 px is text and
+ * the bottom 144 px is the candle bitmap (`CHART_Y`), so the legend never sits on the ink.
+ */
+function detail(s: ViewState): Line[] {
+  const sym = visible(s)[s.sel] ?? s.watchlist[0] ?? '';
+  const q = s.quotes.find((x) => x.symbol === sym);
+  const t = s.targets[sym];
+  if (!q || !t) return [{ text: 'Nothing to detail' }];
+  const pos = s.book.positions[sym];
+  const ladder = pos && pos.qty > 0 ? ladderFor(pos.avgCost, t.sell.low) : [];
+  const chart = s.chart;
+  const window = chart?.candles.length ? extent(chart.candles) : null;
+  const head = `DETAIL · ${sym} ${px(q.price)} ${moveMark(q.changePct)}${pctText(q.changePct)} ${freshDot(q)} ${q.session}`;
+  const lines: Line[] = [
+    { text: clip(head), level: 4 },
+    {
+      text: spread(
+        ` ${chart ? `${chart.range} · ${stepLabel(chart.step)}` : 'No chart yet'}`,
+        chart ? (chart.mock ? 'mock bars' : `${px(window!.low)} - ${px(window!.high)} range`) : '',
+      ),
+      level: 1,
+    },
+    { text: clip(`  buy ${zoneText(t.buy.low, t.buy.high)}   sell ${zoneText(t.sell.low, t.sell.high)}`), level: 3 },
+    {
+      text: spread(
+        `  ${pos && pos.qty > 0 ? `hold ${fmtQty(sym, pos.qty)} avg ${px(pos.avgCost)}` : 'flat'}${t.stop === null ? '' : `   stop ${px(t.stop)}`}`,
+        pos && pos.qty > 0 ? rungMarks(ladder.filter((r) => q.price >= r).length, ladder.length) : '',
+      ),
+      level: 2,
+    },
+    // The sparkline is the fallback chart: same shape, drawn with text, so a screen with
+    // no image container still shows more than a number.
+    { text: clip(`  ${chart?.spark ?? ''}`), level: 4 },
+  ];
+  lines.push({ text: '', level: 0 }, { text: clip('SWIPE range   TAP back   LONG edit targets'), level: 1, rule: true });
+  return lines;
 }
 
 function portfolio(s: ViewState): Line[] {
@@ -259,7 +315,9 @@ export function buildFrame(s: ViewState): AppFrame {
           ? portfolio(s)
           : s.screen === 'journal'
             ? journal(s)
-            : watch(s);
+            : s.screen === 'detail'
+              ? detail(s)
+              : watch(s);
   return { lines, text: lines.map((l) => l.text).join('\n') };
 }
 

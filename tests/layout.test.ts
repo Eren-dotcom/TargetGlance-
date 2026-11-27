@@ -5,6 +5,8 @@ import { emptyBook, buy } from '../src/core/paper.ts';
 import { defaultTargets } from '../src/core/targets.ts';
 import { bar, rungMarks } from '../src/g2/bar.ts';
 import { BOLD, NORMAL, hardwareFrame, looksUrgent } from '../src/g2/look.ts';
+import { mockCandles } from '../src/core/candles.ts';
+import { textSpark } from '../src/g2/bar.ts';
 
 /**
  * The glasses font is proportional and a fullwidth glyph (`─ ● █`) is a hard 20 px.
@@ -41,12 +43,24 @@ const base = (): ViewState => ({
   now: Date.now(),
 });
 
-const screens: ViewState['screen'][] = ['watch', 'portfolio', 'journal', 'edit'];
+const screens: ViewState['screen'][] = ['watch', 'portfolio', 'journal', 'edit', 'detail'];
+
+/** The detail view is the one screen that carries a chart, so it is measured with one. */
+const withChart = (s: ViewState): ViewState => ({
+  ...s,
+  chart: {
+    range: '1D',
+    step: '5m',
+    mock: false,
+    candles: mockCandles('NVDA', 138.2, 78),
+    spark: textSpark(mockCandles('NVDA', 138.2, 78).map((c) => c.c), 32),
+  },
+});
 
 describe('layout fits 576×288', () => {
   for (const screen of screens) {
     it(`${screen} never wraps a line`, () => {
-      const frame = buildFrame({ ...base(), screen });
+      const frame = buildFrame(withChart({ ...base(), screen }));
       for (const line of frame.lines) {
         const width = getTextWidth(line.text);
         expect(width, `"${line.text}" is ${width}px`).toBeLessThanOrEqual(WIDTH);

@@ -1,7 +1,8 @@
 import { SYMBOLS, knownSymbols } from '../core/symbols.ts';
 import { MAX_BODY, isStateKey, type Store } from './store.ts';
 import { validateWrite } from '../core/state.ts';
-import { RESET_JUDGE, judge, probe, quotesNow, type JudgeState } from './quotes.ts';
+import { RESET_JUDGE, candlesFor, judge, probe, quotesNow, type JudgeState } from './quotes.ts';
+import { RANGES, type Range } from '../core/candles.ts';
 import type { SessionOverride } from '../core/session.ts';
 
 const SESSIONS: SessionOverride[] = ['auto', 'LIVE', 'PRE', 'AH', 'CLOSED'];
@@ -41,6 +42,17 @@ export async function handle(req: Req, store: Store): Promise<Res> {
   }
 
   if (pathname === '/api/symbols') return ok(SYMBOLS);
+
+  if (pathname === '/api/candles' && method === 'GET') {
+    const raw = (query.get('symbols') ?? '').split(',').filter(Boolean);
+    if (!raw.length) return bad('symbols is required');
+    const symbols = knownSymbols(raw);
+    if (!symbols.length) return bad(`no known symbols in: ${raw.join(',')}`);
+    const asked = query.get('range') ?? '1D';
+    // An unknown range is a typo, not a request to fetch something arbitrary upstream.
+    if (!RANGES.includes(asked as Range)) return bad(`range must be one of ${RANGES.join(', ')}`);
+    return ok(await Promise.all(symbols.map((s) => candlesFor(s, asked as Range))));
+  }
 
   if (pathname === '/api/probe' && method === 'GET') return ok(await probe());
 

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { handle } from '../src/server/handler.ts';
 import { createStore } from '../src/server/store.ts';
-import { judge, clearCache } from '../src/server/quotes.ts';
+import { judge, clearCache, clearHistoryCache } from '../src/server/quotes.ts';
+import { RANGE_SPEC } from '../src/core/candles.ts';
 
 const store = () => createStore('/tmp/targetglance-test-state.json');
 const call = (method: string, path: string, body = '') => {
@@ -13,6 +14,7 @@ describe('api', () => {
   beforeEach(async () => {
     await call('POST', '/api/judge', JSON.stringify({ reset: true, resetState: true }));
     clearCache();
+    clearHistoryCache();
     vi.unstubAllGlobals();
   });
 
@@ -103,5 +105,47 @@ describe('api', () => {
   it('caps oversized bodies', async () => {
     const big = JSON.stringify({ x: 'a'.repeat(70_000) });
     expect((await call('PUT', '/api/state/trades', big)).status).toBe(413);
+  });
+
+  it('serves candles that are bars, not junk, on every range', async () => {
+    const r = await call('GET', '/api/candles?symbols=BTC,NVDA&range=1D');
+    expect(r.status).toBe(200);
+    const out = r.json as any[];
+    expect(out.map((h) => h.symbol)).toEqual(['BTC', 'NVDA']);
+    for (const h of out) {
+      expect(h.range).toBe('1D');
+      expect(h.candles.length).toBeGreaterThan(10);
+      // Same bar shape the chart relies on: body inside wick, positive prices.
+      for (const c of h.candles) {
+        expect(c.h).toBeGreaterThanOrEqual(c.l);
+        expect(c.o).toBeGreaterThan(0);
+        expect(c.c).toBeGreaterThan(0);
+      }
+      expect(Number.isFinite(h.candles.at(-1).c)).toBe(true);
+    }
+  });
+
+  it('rejects an unknown range and an unknown symbol instead of fetching anything', async () => {
+    expect((await call('GET', '/api/candles?symbols=BTC&range=9Y')).status).toBe(400);
+    expect((await call('GET', '/api/candles?symbols=EVIL')).status).toBe(400);
+    expect((await call('GET', '/api/candles')).status).toBe(400);
+  });
+
+  it('ends the history on the quote above it, simulation included', async () => {
+    const [plain] = (await call('GET', '/api/candles?symbols=SOL&range=1D')).json as any[];
+    await call('POST', '/api/judge', JSON.stringify({ sim: { SOL: 12 } }));
+    const [simmed] = (await call('GET', '/api/candles?symbols=SOL&range=1D')).json as any[];
+    const [quote] = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    // A simulated price must not leave the chart ending somewhere the row does not.
+    expect(simmed.candles.at(-1).c).toBe(quote.price);
+    expect(simmed.candles.at(-1).c).toBeGreaterThan(plain.candles.at(-1).c);
+  });
+
+  it('gives the demo a deterministic history when the judge forces mock', async () => {
+    await call('POST', '/api/judge', JSON.stringify({ mock: true }));
+    const [h] = (await call('GET', '/api/candles?symbols=NVDA&range=5D')).json as any[];
+    expect(h.mock).toBe(true);
+    expect(h.step).toBe('30m');
+    expect(h.candles.length).toBe(RANGE_SPEC['5D'].bars);
   });
 });

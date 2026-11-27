@@ -3,6 +3,8 @@ import { describeIntent, parseTargets } from '../core/voice.ts';
 import { defaultTargets, validateTargets, type Targets } from '../core/targets.ts';
 import { START_CASH, emptyBook, buy, ladderFor, type Book } from '../core/paper.ts';
 import { fmt as fmtPrice } from '../core/format.ts';
+import { RANGES, stepLabel, type History, type Range } from '../core/candles.ts';
+import { renderCandles } from '../g2/chart.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const state: Record<'targets' | 'book' | 'alerts' | 'trades' | 'watchlist', unknown> = {
@@ -31,6 +33,8 @@ async function loadAll() {
   judge = j;
   renderChips();
   renderTargets();
+  renderChartSymbols();
+  void renderChart();
   renderSim();
   renderToggles();
 }
@@ -81,6 +85,71 @@ function moveTo(sym: string, zone: 'buy' | 'sell'): number | null {
   if (!q || !t || !q.price) return null;
   const dest = zone === 'buy' ? t.buy.high * 0.995 : t.sell.low * 1.005;
   return Math.round(((dest / q.price - 1) * 100) * 10) / 10;
+}
+
+/**
+ * The big chart. It paints the exact byte map the glasses' image container gets, at 3×, so
+ * "does my buy zone look realistic" can be answered on a laptop and trusted on glass.
+ */
+let chartRange: Range = '1D';
+
+async function renderChart() {
+  const canvas = $('chart') as HTMLCanvasElement;
+  const sym = ($('chartSym') as HTMLSelectElement).value || (state.watchlist as string[])[0];
+  if (!sym) return;
+  for (const r of RANGES) $(`r${r}`).classList.toggle('on', r === chartRange);
+  let h: History | null = null;
+  try {
+    const r = await fetch(`/api/candles?symbols=${encodeURIComponent(sym)}&range=${chartRange}`);
+    if (r.ok) h = ((await r.json()) as History[])[0] ?? null;
+  } catch {
+    h = null;
+  }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  if (!h || !h.candles.length) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    $('chartMeta').textContent = 'no history for this symbol';
+    return;
+  }
+  const q = quotes.find((x) => x.symbol === sym);
+  const targets = (state.targets as Record<string, Targets>)[sym] ?? null;
+  const map = renderCandles({ candles: h.candles, price: q?.price, targets, range: h.range });
+  const img = ctx.createImageData(map.width, map.height);
+  for (let i = 0; i < map.data.length; i++) {
+    const v = map.data[i]!;
+    img.data[i * 4] = v * 0.36;
+    img.data[i * 4 + 1] = v;
+    img.data[i * 4 + 2] = v * 0.55;
+    img.data[i * 4 + 3] = 255;
+  }
+  // Paint at 1× into an offscreen canvas, then blow it up without smoothing: the pixels
+  // must stay pixels, exactly as they will look at 2× on the glass.
+  const off = document.createElement('canvas');
+  off.width = map.width;
+  off.height = map.height;
+  off.getContext('2d')?.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+  const last = h.candles.at(-1)!;
+  const first = h.candles[0]!;
+  const pct = first.c > 0 ? ((last.c - first.c) / first.c) * 100 : 0;
+  $('chartMeta').textContent = `${h.candles.length} bars · ${stepLabel(h.step)} · ${first.c > 0 ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : ''} · ${h.mock ? 'mock' : h.source}`;
+}
+
+function renderChartSymbols() {
+  const sel = $('chartSym') as HTMLSelectElement;
+  const keep = sel.value;
+  sel.replaceChildren(
+    ...(state.watchlist as string[]).map((sym) => {
+      const o = document.createElement('option');
+      o.value = sym;
+      o.textContent = sym;
+      return o;
+    }),
+  );
+  if (keep && (state.watchlist as string[]).includes(keep)) sel.value = keep;
 }
 
 function renderSim() {
@@ -260,6 +329,14 @@ function wire() {
       .join('  ·  ');
   };
 
+  for (const r of RANGES) {
+    $(`r${r}`).onclick = () => {
+      chartRange = r;
+      void renderChart();
+    };
+  }
+  ($('chartSym') as HTMLSelectElement).onchange = () => void renderChart();
+
   $('refreshLog').onclick = () => void refreshLog();
   $('copyLog').onclick = async () => {
     $('probeOut').textContent = await copyText($('log').textContent ?? '');
@@ -290,6 +367,8 @@ async function boot() {
   const health = await fetch('/health').then((r) => r.json()).catch(() => null);
   $('health').textContent = health?.ok ? 'service ok' : 'service offline';
   setInterval(() => void refreshQuotes(), 5000);
+  // The chart follows the quote (last bar = live price), on the same cadence.
+  setInterval(() => void renderChart(), 15_000);
   setInterval(() => void refreshLog(), 10000);
 }
 

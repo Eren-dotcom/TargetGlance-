@@ -23,6 +23,7 @@ export interface Ticker {
 
 export const BINANCE = 'https://api.binance.com/api/v3/ticker/24hr?symbol=';
 export const YAHOO = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+export const BINANCE_KLINES = 'https://api.binance.com/api/v3/klines?symbol=';
 
 const json = async (url: string) => {
   const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
@@ -78,4 +79,51 @@ export function round(n: number): number {
   const dp = abs >= 1000 ? 1 : abs >= 1 ? 2 : 6;
   const f = 10 ** dp;
   return Math.round(n * f) / f;
+}
+
+export interface Bar {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+}
+
+/**
+ * Bars from Binance klines: `[openTime, open, high, low, close, …]` per row.
+ * `soFar` is the rarer cap on rows the vendor is willing to return; `wanted` is what the
+ * chart asked for, so the tail is always the part that reaches the newest bar.
+ */
+export async function binanceKlines(pair: string, interval: string, wanted: number): Promise<Bar[]> {
+  const d = await json(`${BINANCE_KLINES}${pair}&interval=${interval}&limit=${wanted}`);
+  if (!Array.isArray(d)) throw new Error('binance: no klines');
+  return d.map((r: unknown[]) => ({
+    t: Number(r[0]),
+    o: Number(r[1]),
+    h: Number(r[2]),
+    l: Number(r[3]),
+    c: Number(r[4]),
+  }));
+}
+
+/** Bars from Yahoo's chart endpoint; `null` entries are the gaps between sessions. */
+export async function yahooCandles(symbol: string, range: string, interval: string): Promise<Bar[]> {
+  const d = await json(`${YAHOO}${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`);
+  const result = d?.chart?.result?.[0];
+  const stamps: unknown[] = result?.timestamp ?? [];
+  const quote = result?.indicators?.quote?.[0] ?? {};
+  const out: Bar[] = [];
+  stamps.forEach((t, i) => {
+    const bar = {
+      t: Number(t) * 1000,
+      o: Number(quote.open?.[i]),
+      h: Number(quote.high?.[i]),
+      l: Number(quote.low?.[i]),
+      c: Number(quote.close?.[i]),
+    };
+    // Yahoo pads holidays and halts with nulls; those rows are not bars.
+    if ([bar.o, bar.h, bar.l, bar.c].every((n) => Number.isFinite(n) && n > 0) && bar.h >= bar.l) out.push(bar);
+  });
+  if (!out.length) throw new Error('yahoo: no bars');
+  return out;
 }
