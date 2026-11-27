@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barPct, defaultTargets, point, stepFor, validateTargets, zoneOf } from '../src/core/targets.ts';
+import { barPct, defaultTargets, point, quickBuy, quickSell, quickZone, QUICK_STEPS, stepFor, validateTargets, zoneOf } from '../src/core/targets.ts';
 import { stockSession, sessionFor } from '../src/core/session.ts';
 import { parseTargets } from '../src/core/voice.ts';
 import { SYMBOLS } from '../src/core/symbols.ts';
@@ -81,6 +81,28 @@ describe('target validation', () => {
     expect(stepFor(138.2)).toBe(1);
     expect(stepFor(97400)).toBe(1000);
     expect(stepFor(0.382)).toBeGreaterThan(0);
+  });
+});
+
+describe('quick-set targets', () => {
+  it('brackets the current price symmetrically', () => {
+    expect(quickZone(100, -6)).toEqual({ low: 93, high: 95 });
+    expect(quickZone(100, 6)).toEqual({ low: 105, high: 107 });
+  });
+
+  it('collapses to a point for a price too small for a zone', () => {
+    expect(quickBuy(0.38, -10)).toEqual({ low: 0.34, high: 0.34 });
+    expect(quickSell(0.38, 10)).toEqual({ low: 0.42, high: 0.42 });
+  });
+
+  it('produces valid targets for every step in the ladder', () => {
+    for (const price of [0.38, 12.5, 138.2, 97400]) {
+      for (const pct of QUICK_STEPS) {
+        const z = quickZone(price, pct);
+        expect(z.low).toBeGreaterThan(0);
+        expect(z.high).toBeGreaterThanOrEqual(z.low);
+      }
+    }
   });
 });
 

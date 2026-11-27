@@ -46,9 +46,29 @@ export function nudge(z: Zone, by: number): Zone {
 
 export const roundMoney = (n: number): number => Math.round(n * 100) / 100;
 
+/** The ladder a single tap snaps to, in the order the editor cycles it. */
+export const QUICK_STEPS = [-10, -6, -4, 4, 6, 10] as const;
+
+const at = (price: number, pct: number) => roundMoney(price * (1 + pct / 100));
+
 export function quickSets(price: number): { buy: Zone; sell: Zone } {
-  const at = (pct: number) => roundMoney(price * (1 + pct / 100));
-  return { buy: { low: at(-6), high: at(-4) }, sell: { low: at(4), high: at(6) } };
+  return { buy: { low: at(price, -6), high: at(price, -4) }, sell: { low: at(price, 4), high: at(price, 6) } };
+}
+
+/** One tap cycles -10 / -6 / -4 / +4 / +6 / +10 % away from the current price. */
+export function quickZone(price: number, pct: number): Zone {
+  const center = at(price, pct);
+  const half = roundMoney(Math.abs(price * 0.01));
+  return { low: roundMoney(center - half), high: roundMoney(center + half) };
+}
+
+/** Quick-set a buy target: a zone under the price, or a point when the price is tiny. */
+export function quickBuy(price: number, pct: number = -6): Zone {
+  return price < 5 ? { low: at(price, pct), high: at(price, pct) } : quickZone(price, pct);
+}
+
+export function quickSell(price: number, pct: number = 6): Zone {
+  return price < 5 ? { low: at(price, pct), high: at(price, pct) } : quickZone(price, pct);
 }
 
 /** Default zones: buy a little under price, sell a little above. */

@@ -108,3 +108,25 @@ export const returnPct = (total: number, start = START_CASH): number =>
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
+
+/**
+ * Scaled take-profit ladder: one third of the ORIGINAL lot at each target, sized off the
+ * rung that fired so the three tranches never add up to more than the position.
+ * Returns the number of rungs step is worth, which is what the glasses draw as rungs.
+ */
+export const LADDER_SHARE = 1 / 3;
+
+/**
+ * `[+15%, +30%, sell target]` off the average cost. The last rung is the user's own sell
+ * zone, so the ladder cannot contradict the target they set — and while holding, the
+ * ladder *is* the sell side. Rungs below cost would just be losses dressed as targets,
+ * so the first rung is never less than cost.
+ */
+export function ladderFor(avgCost: number, sellLow?: number, multipliers = [1.15, 1.3]): number[] {
+  const tail = sellLow && sellLow > 0 ? Math.round(sellLow * 100) / 100 : Math.round(avgCost * 1.5 * 100) / 100;
+  // A rung above the exit would never be reached before the sell zone takes the rest.
+  const early = multipliers
+    .map((m) => Math.round(avgCost * m * 100) / 100)
+    .filter((r) => r < tail);
+  return [...new Set([...early, tail])].sort((a, b) => a - b);
+}

@@ -1,12 +1,21 @@
 import { PRESETS, knownSymbols } from '../core/symbols.ts';
-import { defaultTargets, nudge, quickSets, stepFor, validateTargets, type Targets } from '../core/targets.ts';
+import { defaultTargets, nudge, quickBuy, quickSell, quickSets, QUICK_STEPS, stepFor, validateTargets, type Targets } from '../core/targets.ts';
 import { freshAlertState, pollAlert, snooze, type Alert, type AlertMap } from '../core/alerts.ts';
-import { START_CASH, emptyBook, fmtQty, sizeQty, sell, buy, type Book, type Trade } from '../core/paper.ts';
+import { LADDER_SHARE, START_CASH, emptyBook, fmtQty, ladderFor, sizeQty, sell, buy, type Book, type Trade } from '../core/paper.ts';
 import { buildFrame, visibleSymbols, type Flash, type Filter, type ViewState, type ViewQuote } from './frame.ts';
+import { hardwareFrame } from './look.ts';
 import { connect, render, type Gesture } from './sdk.ts';
 import { mountMirror } from './mirror.ts';
 
 const POLL_MS = 5000;
+/** `?look=preview` shades lines; the default is the hardware's single brightness. */
+const lookFromUrl = (): boolean => {
+  try {
+    return new URLSearchParams(globalThis.location?.search ?? '').get('look') !== 'preview';
+  } catch {
+    return true;
+  }
+};
 const UNDO_MS = 5000;
 const STATE_KEYS = ['targets', 'book', 'alerts', 'trades', 'watchlist'] as const;
 
@@ -74,6 +83,9 @@ export class App {
   field = 0;
   undo: Snapshot | null = null;
   busy = false;
+  mono = lookFromUrl();
+  /** Quick-set ladder index, so repeated taps cycle instead of resetting to the same place. */
+  quickIdx = 1;
 
   async boot() {
     await this.load();
@@ -149,12 +161,19 @@ export class App {
       const t = this.targets[q.symbol];
       if (!t) continue;
       const prev = this.alerts[q.symbol] ?? freshAlertState();
+      const pos = this.book.positions[q.symbol];
+      const holds = (pos?.qty ?? 0) > 0;
       const { state, alert } = pollAlert(prev, {
         symbol: q.symbol,
         price: q.price,
         changePct: q.changePct,
         targets: t,
-        holds: (this.book.positions[q.symbol]?.qty ?? 0) > 0,
+        holds,
+        // A paper position's ladder steps off its average cost, so rungs survive a restart.
+        rungs: holds && pos ? ladderFor(pos.avgCost, t.sell.low) : [],
+        stop: holds ? t.stop : null,
+        // A simulated move is the judge asking for this price, not a wild tick to wait out.
+        force: q.simPct !== undefined,
         now,
       });
       this.alerts[q.symbol] = state;
@@ -166,13 +185,20 @@ export class App {
     if (dirty) void api.put('alerts', this.alerts);
   }
 
-  plan(symbol: string, zone: 'buy' | 'sell', price: number) {
-    if (zone === 'sell') {
-      const held = this.book.positions[symbol]?.qty ?? 0;
-      const cost = held * price;
-      return { qty: held, cost, pctCash: this.book.cash > 0 ? Math.round((cost / this.book.cash) * 100) : 100 };
+  plan(a: Alert) {
+    const price = a.price;
+    if (a.zone === 'sell') {
+      const held = this.book.positions[a.symbol]?.qty ?? 0;
+      // Stop or the last rung exits the lot; an earlier rung takes one third.
+      const qty = a.stop || a.final ? held : Math.max(Math.floor(held * LADDER_SHARE * 1e6) / 1e6, 0);
+      const cost = qty * price;
+      return {
+        qty,
+        cost,
+        pctCash: this.book.cash > 0 ? Math.round((cost / this.book.cash) * 100) : 100,
+      };
     }
-    const sized = sizeQty(symbol, this.book.cash, price);
+    const sized = sizeQty(a.symbol, this.book.cash, price);
     // 5% of a small book can be less than one share; one affordable share beats nothing.
     const qty = sized > 0 ? sized : Math.floor(this.book.cash / price);
     const cost = qty * price;
@@ -182,8 +208,16 @@ export class App {
   nextFlash() {
     if (this.flash || !this.queue.length) return;
     const a = this.queue.shift()!;
-    const p = this.plan(a.symbol, a.zone, a.price);
-    this.flash = { symbol: a.symbol, zone: a.zone, price: a.price, changePct: a.changePct, ...p };
+    this.flash = {
+      symbol: a.symbol,
+      zone: a.zone,
+      price: a.price,
+      changePct: a.changePct,
+      ...this.plan(a),
+      ...(a.rung ? { rung: a.rung } : {}),
+      ...(a.stop ? { stop: true } : {}),
+      ...(a.final ? { final: true } : {}),
+    };
     this.screen = 'flash';
   }
 
@@ -260,11 +294,13 @@ export class App {
       toast: this.toast,
       trades: this.trades.map(({ symbol, side, qty, price, pnl, ts }) => ({ symbol, side, qty, price, pnl, ts })),
       now: Date.now(),
+      mono: this.mono,
     };
   }
 
   frame() {
-    return buildFrame(this.view());
+    const f = buildFrame(this.view());
+    return this.mono ? hardwareFrame(f) : f;
   }
 
   async draw() {
@@ -282,7 +318,14 @@ export class App {
     const rows = this.rows();
     switch (this.screen) {
       case 'flash':
-        if (g === 'click') await this.execute(this.flash!.zone === 'buy' ? 'BUY' : 'SELL', this.flash!.symbol, this.flash!.qty, this.flash!.price, 'zone');
+        if (g === 'click')
+          await this.execute(
+            this.flash!.zone === 'buy' ? 'BUY' : 'SELL',
+            this.flash!.symbol,
+            this.flash!.qty,
+            this.flash!.price,
+            this.flash!.stop ? 'stop' : 'zone',
+          );
         else if (g === 'down' || g === 'up' || g === 'double') this.dismiss();
         break;
 
@@ -295,10 +338,24 @@ export class App {
           const step = stepFor(q?.price ?? 100) * (g === 'up' ? -1 : 1);
           if (this.field === 0) t.buy = nudge(t.buy, step);
           else if (this.field === 1) t.sell = nudge(t.sell, step);
-          else if (this.field === 2 && t.stop !== null) t.stop = Math.max(0.01, Math.round((t.stop + step) * 100) / 100);
+          else if (this.field === 2)
+            t.stop = t.stop === null ? Math.round(t.buy.low * 0.9 * 100) / 100 : Math.max(0.01, Math.round((t.stop + step) * 100) / 100);
           await this.draw();
         } else if (g === 'click') {
-          this.field = (this.field + 1) % 4;
+          // On a target row, a tap applies the next quick-set and stays on the row; the
+          // last row has nothing to quick-set, so a tap there wraps back to the buy zone.
+          if (this.field === 3) this.field = 0;
+          else {
+            this.quickIdx = (this.quickIdx + 1) % QUICK_STEPS.length;
+            const pct = QUICK_STEPS[this.quickIdx]!;
+            if (this.field === 0 && pct < 0) t.buy = quickBuy(q?.price ?? t.buy.high, pct);
+            else if (this.field === 1 && pct > 0) t.sell = quickSell(q?.price ?? t.sell.low, pct);
+            else {
+              if (this.field === 0) t.buy = quickBuy(q?.price ?? t.buy.high, -6);
+              else t.sell = quickSell(q?.price ?? t.sell.low, 6);
+            }
+            this.say(`${this.field === 0 ? 'Buy' : 'Sell'} ${pct > 0 ? '+' : ''}${pct}% from ${q ? q.price.toFixed(2) : 'price'}`);
+          }
           await this.draw();
         } else if (g === 'long') {
           await this.saveTargets(sym);

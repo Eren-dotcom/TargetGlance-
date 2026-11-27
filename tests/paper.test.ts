@@ -10,6 +10,8 @@ import {
   sell,
   sizeQty,
   unrealized,
+  ladderFor,
+  LADDER_SHARE,
 } from '../src/core/paper.ts';
 
 const now = new Date('2026-11-27T12:00:00Z');
@@ -71,6 +73,23 @@ describe('paper book', () => {
   it('formats quantities the way each asset class trades', () => {
     expect(fmtQty('NVDA', 4)).toBe('4');
     expect(fmtQty('SOL', 0.350877)).toBe('0.3509');
+  });
+
+  it('spreads a ladder over thirds of the original lot without overselling', () => {
+    expect(ladderFor(100)).toEqual([115, 130, 150]);
+    // The user's sell target becomes the last rung instead of a guessed third step.
+    expect(ladderFor(100, 145)).toEqual([115, 130, 145]);
+    // Never step past the exit: a rung above the sell zone would never be reached.
+    expect(ladderFor(100, 120)).toEqual([115, 120]);
+    expect(ladderFor(100, 105)).toEqual([105]);
+    let book = buy(emptyBook(), 'NVDA', 12, 100, 'zone', now).book;
+    const tranche = Math.floor(12 * LADDER_SHARE); // 4 shares per rung
+    expect(tranche).toBe(4);
+    for (const price of ladderFor(100)) book = sell(book, 'NVDA', tranche, price, 'zone', now).book;
+    expect(book.positions.NVDA!.qty).toBe(0);
+    // 4*(15) + 4*(30) + 4*(50)
+    expect(realizedTotal(book)).toBe(380);
+    expect(book.cash).toBeGreaterThan(START_CASH);
   });
 
   it('clears the cost basis when a position is closed, so a rebuy starts clean', () => {

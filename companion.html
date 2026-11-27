@@ -54,13 +54,18 @@
           <button id="parse">Apply</button>
         </div>
         <div id="parseOut" class="dim"></div>
+        <h2 style="margin-top:14px">TARGETS &amp; LADDER</h2>
+        <table>
+          <thead><tr><th>sym</th><th>buy</th><th>sell</th><th>stop</th><th>rungs</th></tr></thead>
+          <tbody id="targets"></tbody>
+        </table>
+        <div class="dim" style="margin-top:6px">Rungs step off your average cost and end at the sell zone. Paper only.</div>
       </section>
 
       <section>
         <h2>SIMULATE (the demo never waits for the market)</h2>
         <div class="row" id="sim"></div>
         <div class="row">
-          <button id="clearSim">Clear sim</button>
           <button id="mock">Force mock</button>
           <button id="stale">Force stale</button>
         </div>
@@ -72,10 +77,6 @@
             <option value="PRE">PRE</option>
             <option value="AH">AH</option>
             <option value="CLOSED">CLOSED</option>
-          </select>
-          <label class="dim">Poll</label>
-          <select id="poll">
-            <option value="0">5s (G2 default)</option>
           </select>
         </div>
         <div class="row">
@@ -99,7 +100,12 @@
 
       <section>
         <h2>LOG</h2>
-        <div class="row"><button id="refreshLog">Refresh</button><button id="export">Export journal JSON</button></div>
+        <div class="row">
+          <button id="refreshLog">Refresh</button>
+          <button id="copyLog">Copy log</button>
+          <button id="copyJournal">Copy journal JSON</button>
+          <button id="export">Download journal</button>
+        </div>
         <pre id="log">—</pre>
       </section>
     </main>

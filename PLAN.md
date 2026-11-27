@@ -130,7 +130,8 @@ zero flags, nothing to desync.
 ### Ship because it was nearly free (P1)
 
 13. Zone targets (`118-122`) as well as point targets; one parser handles both.
-14. Stop / invalidation zone, paper only.
+14. Stop / invalidation zone, paper only — checked before zones, exits the lot, says `STOP HIT`.
+14b. **Take-profit ladder** (was P2, promoted): while holding, the sell side *is* three rungs.
 15. Falling-knife confirmation: normal ticks alert on crossing, a wild tick (≥ 7 % on the day)
     must hold for 2 polls.
 16. Smart sizing: 5 % of cash, whole shares for stocks, fractional for crypto.
@@ -143,8 +144,8 @@ zero flags, nothing to desync.
 |---|---|
 | Cloud STT / Whisper | Needs a key or a heavy local install; regex parser ships instead |
 | Background push alerts | Not verified on G2; claiming it is a demo-day bug |
-| Scaled take-profit ladder (P2) | Three more price fields and a splittable position model for one demo line |
-| Portfolio heat strip (P2) | The range bar already answers "how far to sell" |
+| ~~Scaled take-profit ladder (P2)~~ | **Promoted to P0.** It needed no new state: rungs are `ladderFor(avgCost, sellLow)`, derived each poll, and "sell one third" is one line in `plan()`. It also fixed a real flaw — see §17. |
+| Portfolio heat strip (P2) | The rungs under each row already answer "how far to sell" |
 | Animations / transitions | Text containers have no tweening; `textColor` + `●` is the whole budget |
 | G2 contextual-menu presets | Menu items need 32-byte names and a rebuild per switch, for a control the phone already has |
 | Event badges (earnings/ex-div/FOMC) | Needs a data source or hand-maintained dates; a wrong date costs credibility |
@@ -379,7 +380,32 @@ rather than showing a wrong number. Risk: real G2 text may wrap a line this plan
 `MAX_CHARS` and the measured test are the guard, and the first hardware run should re-check
 `tests/layout.test.ts` widths.
 
-## 16. Build order
+## 16. Round two: polish, and the four things it caught
+
+Everything below was found by walking the demo script against the real modules, not by taste.
+
+1. **A simulated dip never fired.** Judge Mode forces `NVDA -13.8 %`, which trips the
+   falling-knife hold (two polls). The demo would sit silent for 10 seconds. Fixed: a quote
+   carrying `simPct` is deliberate, so it skips the hold. The hold still guards real ticks.
+2. **The ladder could place a rung above the user's own sell zone** (`137 / 148 / 155` with a
+   sell zone at `148-152`), so that rung could never fire before the zone took the position.
+   Fixed: rungs are capped at the sell zone, and while holding the first rung *is* the sell
+   edge. The user's own target always wins a disagreement with the app.
+3. **The last rung sold one third instead of the rest.** Walking up through the ladder left
+   shares behind with no rung left to sell them. Fixed: the final rung and a stop both exit
+   the lot (`final` on the alert, not a new flag in state).
+4. **The preview lied about brightness.** Hardware draws one container at one brightness, so
+   the five-level shading in the browser was fiction. Fixed: `src/g2/look.ts` collapses the
+   frame to what firmware can show, using `·` — a 5 px dot that exactly replaces the 5 px
+   space it displaces, because `=` (10 px) pushed full lines to 590 px and wrapped them.
+
+Also in this round: a per-symbol **targets and ladder table** in the companion (it could set
+targets but not see them), simulate buttons that compute the exact move into a zone instead of
+guessing `-13 %`, copy-to-clipboard for the journal (a download is blocked in embedded frames),
+explicit freshness text per row (`live now` / `stale 2m` / `mock`), and one shared price
+formatter (`src/core/format.ts`) after `g2/fmt.ts` drifted from the companion's copy.
+
+## 17. Build order
 
 - [x] Analysis + plan + ponytail rules vendored (`AGENTS.md`, MIT)
 - [x] Scaffold: `package.json`, `tsconfig`, `vite.config.ts`, `app.json`, pages
@@ -387,8 +413,9 @@ rather than showing a wrong number. Risk: real G2 text may wrap a line this plan
 - [x] Server: sources, store, handler, standalone
 - [x] G2 view: frame, sdk, browser mirror
 - [x] Companion (Judge Mode)
-- [x] 63 tests green · `tsc` clean · `vite build` clean · dev server verified · `evenhub pack` verified
+- [x] 84 tests green · `tsc` clean · `vite build` clean · dev server verified · `evenhub pack` verified
 - [x] README
+- [x] Round two: ladder, stops wired, hardware-honest preview, companion target table
 
 ### What the build changed in this plan (found by writing it)
 

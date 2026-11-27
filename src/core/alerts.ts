@@ -1,12 +1,14 @@
-import { zoneOf, type Targets } from './targets.ts';
+import type { Targets } from './targets.ts';
 
 export interface AlertState {
   /** Zone we were last inside, null when price sits between the zones. */
   zone: 'buy' | 'sell' | null;
+  /** Rung inside the current zone: 1 for the buy zone, 1..3 for the take-profit ladder. */
+  level: number;
   lastPrice: number | null;
   lastAlertAt: number | null;
-  /** Zone of the last alert: the cooldown is per zone, so a buy→sell crossing is news. */
-  lastZone: 'buy' | 'sell' | null;
+  /** `zone` + `level` of the last alert: the cooldown is per rung, so a new rung is news. */
+  lastKey: string | null;
   snoozedUntil: number | null;
   /** Consecutive polls spent inside the current zone. */
   held: number;
@@ -19,19 +21,26 @@ export type AlertMap = Record<string, AlertState>;
 export interface Alert {
   symbol: string;
   zone: 'buy' | 'sell';
+  level: number;
   price: number;
   /** Percent move on the day, so the flash can warn about a falling knife. */
   changePct: number;
+  /** Take-profit rung this sell alert came from, if any. */
+  rung?: number;
+  /** Last rung reached: the remainder is the trade, not another third. */
+  final?: boolean;
+  /** Stop zone breach on a paper position. */
+  stop?: boolean;
   at: number;
 }
 
 /**
- * Re-alert guard, scoped per zone: crossing-only already stops repeats inside a zone,
- * and a buy→sell crossing is new information, not a repeat.
+ * Re-alert guard, scoped per rung: crossing-only already stops repeats inside a zone,
+ * and buy→sell or rung→rung is new information, not a repeat.
  */
 export const COOLDOWN_MS = 60_000;
 export const SNOOZE_MS = 3_600_000;
-/** A tick falls out of the buy zone only past this buffer, which kills edge flicker. */
+/** A tick leaves a zone only past this buffer, which kills edge flicker. */
 export const HYSTERESIS = 0.0025;
 /** Beyond this daily move, one tick is not enough: the price must hold a second poll. */
 export const WILD_PCT = 7;
@@ -39,9 +48,10 @@ export const MAX_QUEUE = 3;
 
 export const freshAlertState = (): AlertState => ({
   zone: null,
+  level: 0,
   lastPrice: null,
   lastAlertAt: null,
-  lastZone: null,
+  lastKey: null,
   snoozedUntil: null,
   held: 0,
   pending: false,
@@ -52,6 +62,10 @@ export interface PollInput {
   price: number;
   changePct: number;
   targets: Targets;
+  /** Ladder prices above average cost; empty when flat. */
+  rungs: number[];
+  /** Invalidation price of the open paper position, if one is armed. */
+  stop: number | null;
   /** Something to sell: a sell-zone flash on a flat book would be a dud screen. */
   holds: boolean;
   now: number;
@@ -64,43 +78,84 @@ export interface PollResult {
   alert: Alert | null;
 }
 
+/** Which rung (1-based) the price has reached; 0 when below all of them. */
+export function rungLevel(rungs: number[], price: number): number {
+  let level = 0;
+  rungs.forEach((at, i) => {
+    if (price >= at) level = i + 1;
+  });
+  return level;
+}
+
 /**
- * Crossing-only alerting. The single rule that also gives auto-arm for free:
- * buy alerts fire while flat, sell alerts fire while holding. After a paper buy the
- * book holds, so the sell alert is armed by definition — no extra flag to desync.
+ * Crossing-only alerting. The rule that also gives auto-arm for free: buy alerts fire
+ * while flat, sell alerts fire while holding — after a paper buy the book holds, so the
+ * sell side is armed by definition. Stops are checked before zones, because getting out
+ * of a broken paper position is never the moment to be clever about targets.
  */
 export function pollAlert(prev: AlertState, i: PollInput): PollResult {
-  const raw = zoneOf(i.targets, i.price);
+  if (i.holds && i.stop !== null && i.price <= i.stop) {
+    const key = 'stop';
+    const state: AlertState = { ...prev, zone: prev.zone, lastPrice: i.price, held: prev.held + 1 };
+    const suppressed =
+      !i.force &&
+      ((prev.lastKey === key && prev.lastAlertAt && i.now - prev.lastAlertAt < COOLDOWN_MS) ||
+        (prev.snoozedUntil !== null && i.now < prev.snoozedUntil));
+    if (suppressed) return { state, alert: null };
+    return {
+      state: { ...state, lastKey: key, lastAlertAt: i.now, pending: false },
+      alert: { symbol: i.symbol, zone: 'sell', level: 0, price: i.price, changePct: i.changePct, stop: true, at: i.now },
+    };
+  }
+
+  // While holding, the ladder is the sell side, and its first rung is the edge. A ladder
+  // that does not exist yet (just bought, cost unknown) falls back to the user's zone.
+  const sellEdge = i.holds && i.rungs.length >= 2 ? i.rungs[0]! : i.targets.sell.low;
+  const raw = i.price <= i.targets.buy.high ? 'buy' : i.price >= sellEdge ? 'sell' : null;
   // Sticky exit: leaving a zone needs a real move past its edge, not a hair.
   const zone =
     prev.zone === 'buy' && raw === null && i.price < i.targets.buy.high * (1 + HYSTERESIS)
       ? 'buy'
-      : prev.zone === 'sell' && raw === null && i.price > i.targets.sell.low * (1 - HYSTERESIS)
+      : prev.zone === 'sell' && raw === null && i.price > sellEdge * (1 - HYSTERESIS)
         ? 'sell'
         : raw;
 
-  if (!zone) return { state: { ...prev, zone: null, lastPrice: i.price, held: 0, pending: false }, alert: null };
+  if (!zone) {
+    return { state: { ...prev, zone: null, level: 0, lastPrice: i.price, held: 0, pending: false }, alert: null };
+  }
 
-  const crossing = zone !== prev.zone;
+  const level = zone === 'buy' ? 1 : Math.max(1, rungLevel(i.rungs, i.price));
+  const triggered = zone !== prev.zone || level > prev.level;
   // `held` keeps counting inside the zone so a suppressed first tick can still fire on
   // the next poll — that is exactly the falling-knife hold.
-  const state: AlertState = crossing
-    ? { ...prev, zone, lastPrice: i.price, held: prev.held + 1, pending: true }
-    : { ...prev, lastPrice: i.price, held: prev.held + 1 };
+  const state: AlertState = { ...prev, zone, level, lastPrice: i.price, held: prev.held + 1, pending: true };
 
-  if (!crossing && !state.pending) return { state, alert: null };
+  // Nothing new at this rung, and nothing was suppressed earlier either: stay quiet.
+  if (!triggered && !prev.pending) return { state: { ...state, pending: false }, alert: null };
+
   if (!i.force) {
     if (zone === 'sell' && !i.holds) return { state, alert: null };
-    if (prev.snoozedUntil && i.now < prev.snoozedUntil) return { state, alert: null };
-    if (prev.lastZone === zone && prev.lastAlertAt && i.now - prev.lastAlertAt < COOLDOWN_MS)
+    if (prev.snoozedUntil !== null && i.now < prev.snoozedUntil) return { state, alert: null };
+    const key = `${zone}${level}`;
+    if (prev.lastKey === key && prev.lastAlertAt && i.now - prev.lastAlertAt < COOLDOWN_MS)
       return { state, alert: null };
     const needed = Math.abs(i.changePct) >= WILD_PCT ? 2 : 1;
     if (state.held < needed) return { state, alert: null };
   }
 
+  const rung = zone === 'sell' ? i.rungs[level - 1] : undefined;
   return {
-    state: { ...state, lastAlertAt: i.now, lastZone: zone, pending: false },
-    alert: { symbol: i.symbol, zone, price: i.price, changePct: i.changePct, at: i.now },
+    state: { ...state, lastAlertAt: i.now, lastKey: `${zone}${level}`, pending: false },
+    alert: {
+      symbol: i.symbol,
+      zone,
+      level,
+      price: i.price,
+      changePct: i.changePct,
+      ...(rung !== undefined ? { rung } : {}),
+      ...(zone === 'sell' && i.holds && level >= i.rungs.length ? { final: true } : {}),
+      at: i.now,
+    },
   };
 }
 
@@ -118,6 +173,4 @@ export function enqueue(queue: Alert[], a: Alert): Alert[] {
 }
 
 /** Judge Mode "reset" must not leave a stale crossing behind that fires on first poll. */
-export function resetAlertStates(): AlertMap {
-  return {};
-}
+export const resetAlertStates = (): AlertMap => ({});

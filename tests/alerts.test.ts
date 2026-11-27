@@ -16,7 +16,17 @@ const targets: Targets = { buy: { low: 135, high: 140 }, sell: { low: 178, high:
 const T0 = 1_700_000_000_000;
 
 const step = (prev: AlertState, price: number, extra: Partial<PollInput> = {}) =>
-  pollAlert(prev, { symbol: 'SOL', price, changePct: -2, targets, holds: false, now: T0, ...extra });
+  pollAlert(prev, {
+    symbol: 'SOL',
+    price,
+    changePct: -2,
+    targets,
+    holds: false,
+    rungs: [],
+    stop: null,
+    now: T0,
+    ...extra,
+  });
 
 describe('alert state machine', () => {
   it('fires once when price crosses into the buy zone', () => {
@@ -76,12 +86,48 @@ describe('alert state machine', () => {
     expect(step(s, 139, { now: T0 + 1000, force: true }).alert?.zone).toBe('buy');
   });
 
+  it('fires once per ladder rung on the way up, never twice for the same rung', () => {
+    const held = { holds: true, rungs: [150, 170, 190] };
+    const first = step(freshAlertState(), 155, held);
+    expect(first.alert).toMatchObject({ zone: 'sell', level: 1, rung: 150 });
+
+    const same = step(first.state, 158, { ...held, now: T0 + 10_000 });
+    expect(same.alert).toBeNull();
+
+    const second = step(same.state, 172, { ...held, now: T0 + 20_000 });
+    expect(second.alert).toMatchObject({ zone: 'sell', level: 2, rung: 170 });
+
+    // A gap that skips a rung reports the highest one reached.
+    const jump = step(freshAlertState(), 250, held);
+    expect(jump.alert).toMatchObject({ level: 3, rung: 190 });
+  });
+
+  it('never fires a rung while flat, even above every rung', () => {
+    const r = step(freshAlertState(), 250, { holds: false, rungs: [150, 170, 190] });
+    expect(r.alert?.rung).toBeUndefined();
+    expect(r.state.zone).toBe('sell'); // position remembered, so a later buy starts from here
+  });
+
+  it('fires a stop before anything else, and stops the lot', () => {
+    const r = step(freshAlertState(), 108, { holds: true, stop: 110, changePct: -12 });
+    expect(r.alert).toMatchObject({ zone: 'sell', stop: true, price: 108 });
+    // The same stop does not repeat inside the cooldown.
+    const again = step(r.state, 105, { holds: true, stop: 110, now: T0 + 5000 });
+    expect(again.alert).toBeNull();
+  });
+
+  it('never calls a stop when there is nothing to sell', () => {
+    const r = step(freshAlertState(), 108, { holds: false, stop: 110 });
+    expect(r.alert?.stop).toBeUndefined();
+    expect(r.alert?.zone).toBe('buy'); // still a normal buy-zone hit
+  });
+
   it('resets to a clean map', () => {
     expect(resetAlertStates()).toEqual({});
   });
 
   it('keeps one flash on screen and drops the oldest past the cap', () => {
-    const mk = (symbol: string) => ({ symbol, zone: 'buy' as const, price: 1, changePct: 0, at: T0 });
+    const mk = (symbol: string) => ({ symbol, zone: 'buy' as const, level: 1, price: 1, changePct: 0, at: T0 });
     let q = enqueue([], mk('A'));
     q = enqueue(q, mk('B'));
     q = enqueue(q, mk('C'));

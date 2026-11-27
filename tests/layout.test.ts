@@ -3,7 +3,8 @@ import { getTextWidth, measureTextWrap } from '@evenrealities/pretext';
 import { buildFrame, visibleSymbols, type ViewState } from '../src/g2/frame.ts';
 import { emptyBook, buy } from '../src/core/paper.ts';
 import { defaultTargets } from '../src/core/targets.ts';
-import { bar } from '../src/g2/bar.ts';
+import { bar, rungMarks } from '../src/g2/bar.ts';
+import { hardwareFrame } from '../src/g2/look.ts';
 
 /**
  * The glasses font is proportional and a fullwidth glyph (`─ ● █`) is a hard 20 px.
@@ -115,5 +116,42 @@ describe('glyph set', () => {
       expect(b).toContain('●');
       expect(getTextWidth(b)).toBe(6 * 20);
     }
+  });
+});
+
+describe('hardware look', () => {
+  it('keeps every line inside 576 px and inside 10 rows', () => {
+    for (const screen of [...screens, 'flash'] as ViewState['screen'][]) {
+      const preview = buildFrame({
+        ...base(),
+        screen,
+        flash: screen === 'flash' ? { symbol: 'NVDA', zone: 'sell', price: 151, changePct: 27, qty: 3, cost: 453, pctCash: 5, rung: 148 } : null,
+      });
+      for (const line of hardwareFrame(preview).lines) {
+        const w = getTextWidth(line.text);
+        expect(w, `"${line.text}" is ${w}px`).toBeLessThanOrEqual(576);
+      }
+      expect(hardwareFrame(preview).lines.length).toBe(preview.lines.length);
+    }
+  });
+
+  it('flattens to one brightness and marks secondary lines without changing width', () => {
+    const preview = buildFrame({ ...base(), screen: 'watch' });
+    const glass = hardwareFrame(preview);
+
+    // Hardware shows one brightness: the mirror must not pretend to shade lines.
+    expect(new Set(glass.lines.map((l) => l.level)).size).toBe(1);
+
+    // Same width per line: the marker swaps a 5 px space for a 5 px dot.
+    preview.lines.forEach((p, i) => {
+      expect(getTextWidth(glass.lines[i]!.text)).toBe(getTextWidth(p.text));
+    });
+
+    // Secondary value rows lose their indent to the marker; a footer that already starts
+    // at column 0 keeps its text and is separated by its rule instead.
+    const marked = glass.lines.filter((l) => l.text.startsWith('·'));
+    expect(marked.length).toBeGreaterThan(1);
+    expect(marked.every((l) => !l.rule)).toBe(true);
+    expect(glass.lines.some((l) => l.rule)).toBe(true);
   });
 });

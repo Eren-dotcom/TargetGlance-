@@ -1,7 +1,8 @@
 import { PRESETS, SYMBOLS, knownSymbols } from '../core/symbols.ts';
 import { describeIntent, parseTargets } from '../core/voice.ts';
 import { defaultTargets, validateTargets, type Targets } from '../core/targets.ts';
-import { START_CASH, emptyBook, buy } from '../core/paper.ts';
+import { START_CASH, emptyBook, buy, ladderFor, type Book } from '../core/paper.ts';
+import { fmt as fmtPrice } from '../core/format.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const state: Record<'targets' | 'book' | 'alerts' | 'trades' | 'watchlist', unknown> = {
@@ -29,8 +30,27 @@ async function loadAll() {
   state.trades = trades ?? [];
   judge = j;
   renderChips();
+  renderTargets();
   renderSim();
   renderToggles();
+}
+
+/** One row per symbol: what the glasses would alert on, and where the ladder sits. */
+function renderTargets() {
+  const targets = state.targets as Record<string, Targets>;
+  const book = state.book as Book;
+  $('targets').replaceChildren(
+    ...(state.watchlist as string[]).map((sym) => {
+      const t = targets[sym];
+      const pos = book?.positions[sym];
+      const rungs = t && pos && pos.qty > 0 ? ladderFor(pos.avgCost, t.sell.low) : [];
+      const tr = document.createElement('tr');
+      tr.innerHTML = t
+        ? `<td>${sym}</td><td>${fmtPrice(t.buy.low)}-${fmtPrice(t.buy.high)}</td><td>${fmtPrice(t.sell.low)}-${fmtPrice(t.sell.high)}</td><td>${t.stop === null ? '<span class="dim">off</span>' : fmtPrice(t.stop)}</td><td>${rungs.length ? rungs.map(fmtPrice).join(' · ') : '<span class="dim">no position</span>'}</td>`
+        : `<td>${sym}</td><td colspan="4" class="dim">defaults on first quote</td>`;
+      return tr;
+    }),
+  );
 }
 
 function renderChips() {
@@ -51,22 +71,46 @@ function renderChips() {
   if (!list.length) $('chips').textContent = 'empty';
 }
 
+/**
+ * Simulate a move that lands just inside the target, so the demo does not depend on
+ * guessing a percentage: "NVDA dip to 121.4 (-8.1%)".
+ */
+function moveTo(sym: string, zone: 'buy' | 'sell'): number | null {
+  const q = quotes.find((x) => x.symbol === sym);
+  const t = (state.targets as Record<string, Targets>)[sym];
+  if (!q || !t || !q.price) return null;
+  const dest = zone === 'buy' ? t.buy.high * 0.995 : t.sell.low * 1.005;
+  return Math.round(((dest / q.price - 1) * 100) * 10) / 10;
+}
+
 function renderSim() {
-  $('sim').replaceChildren(
-    ...(state.watchlist as string[]).flatMap((sym) => {
-      const mk = (label: string, pct: number) => {
-        const b = document.createElement('button');
-        b.textContent = `${sym} ${pct > 0 ? '+' : ''}${pct}%`;
-        b.onclick = async () => {
-          judge.sim = { ...judge.sim, [sym]: pct };
-          await postJudge({ sim: judge.sim });
-          void refreshQuotes();
-        };
-        return b;
+  const bySymbol = (state.watchlist as string[]).flatMap((sym) => {
+    const dip = moveTo(sym, 'buy');
+    const spike = moveTo(sym, 'sell');
+    const mk = (label: string, pct: number | null) => {
+      const b = document.createElement('button');
+      b.textContent = pct === null ? `${sym} ${label}` : `${sym} ${label} ${pct > 0 ? '+' : ''}${pct}%`;
+      b.disabled = pct === null;
+      b.title = pct === null ? 'No target set — set a zone first' : `Force this symbol to ${label} into its zone`;
+      b.onclick = async () => {
+        judge.sim = { ...judge.sim, [sym]: pct! };
+        await postJudge({ sim: judge.sim });
+        await refreshQuotes();
+        renderSim();
       };
-      return [mk('dip', -13), mk('spike', 27)];
-    }),
-  );
+      return b;
+    };
+    return [mk('dip to', dip), mk('spike to', spike)];
+  });
+  const clear = document.createElement('button');
+  clear.textContent = 'Clear sim';
+  clear.onclick = async () => {
+    judge.sim = {};
+    await postJudge({ sim: {} });
+    await refreshQuotes();
+    renderSim();
+  };
+  $('sim').replaceChildren(...bySymbol, clear);
 }
 
 function renderToggles() {
@@ -76,6 +120,9 @@ function renderToggles() {
 }
 
 async function refreshQuotes() {
+  state.targets = (await get('targets')) ?? state.targets;
+  state.book = (await get('book')) ?? state.book;
+  renderTargets();
   const syms = (state.watchlist as string[]).join(',');
   quotes = syms ? await fetch(`/api/quotes?symbols=${syms}`).then((r) => r.json()) : [];
   const now = Date.now();
@@ -90,9 +137,24 @@ async function refreshQuotes() {
 }
 
 async function refreshLog() {
-  const trades = (await get('trades')) ?? [];
-  const alerts = (await get('alerts')) ?? {};
-  $('log').textContent = JSON.stringify({ alerts, trades: trades.slice(0, 5) }, null, 1);
+  const [trades, alerts, book] = await Promise.all([get('trades'), get('alerts'), get('book')]);
+  $('log').textContent = JSON.stringify({ alerts, positions: book?.positions ?? {}, trades: (trades ?? []).slice(0, 5) }, null, 1);
+}
+
+/** clipboard is blocked in some frames, so fall back to selecting the text. */
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return 'copied';
+  } catch {
+    const range = document.createRange();
+    const pre = $('log');
+    range.selectNodeContents(pre);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    return 'selected — press Ctrl/Cmd+C';
+  }
 }
 
 function wire() {
@@ -163,11 +225,6 @@ function wire() {
     judge.session = (e.target as HTMLSelectElement).value as typeof judge.session;
     await postJudge({ session: judge.session });
   };
-  $('clearSim').onclick = async () => {
-    judge.sim = {};
-    await postJudge({ sim: {} });
-    void refreshQuotes();
-  };
 
   $('seed').onclick = async () => {
     // Deterministic book so the portfolio screen has something to show on stage.
@@ -204,6 +261,12 @@ function wire() {
   };
 
   $('refreshLog').onclick = () => void refreshLog();
+  $('copyLog').onclick = async () => {
+    $('probeOut').textContent = await copyText($('log').textContent ?? '');
+  };
+  $('copyJournal').onclick = async () => {
+    $('probeOut').textContent = await copyText(JSON.stringify((await get('trades')) ?? [], null, 2));
+  };
   $('export').onclick = async () => {
     const trades = (await get('trades')) ?? [];
     const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), trades }, null, 2)], {
@@ -213,7 +276,7 @@ function wire() {
     a.href = URL.createObjectURL(blob);
     a.download = 'targetglance-journal.json';
     a.click();
-    URL.revokeObjectURL(a.href);
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 }
 
