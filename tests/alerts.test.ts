@@ -58,6 +58,24 @@ describe('alert state machine', () => {
     expect(again.alert?.zone).toBe('buy');
   });
 
+  it('arms the zone on a wake-up baseline without announcing a move nobody saw', () => {
+    // Price is already inside the buy zone when the glasses wake up.
+    const base = step(freshAlertState(), 138, { baseline: true });
+    expect(base.alert).toBeNull();
+    expect(base.state.zone, 'the baseline must still record the zone').toBe('buy');
+    // Sitting there afterwards is not news either.
+    expect(step(base.state, 137, { now: T0 + COOLDOWN_MS * 2 }).alert).toBeNull();
+    // A real move out and back in is.
+    const out = step(base.state, 145, { now: T0 + COOLDOWN_MS * 3 });
+    const fresh = step(out.state, 139, { now: T0 + COOLDOWN_MS * 4 });
+    expect(fresh.alert?.zone).toBe('buy');
+  });
+
+  it('lets a judge simulation fire even on the baseline poll', () => {
+    const r = step(freshAlertState(), 138, { baseline: true, force: true });
+    expect(r.alert?.zone).toBe('buy');
+  });
+
   it('enforces the 60 s cooldown across crossings', () => {
     const a = step(freshAlertState(), 139);
     const out = step(a.state, 150, { now: T0 + 10_000 });

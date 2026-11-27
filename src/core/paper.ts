@@ -117,6 +117,23 @@ const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 export const LADDER_SHARE = 1 / 3;
 
 /**
+ * One ladder tranche. A third of the lot, but in the asset's own lot size: a fractional
+ * stock tranche used to leave the book holding 2.667 shares while the screen said `hold 3`.
+ * A lot too small to split sells the smallest honest tranche (one whole share) instead of
+ * rounding down to zero, and a lot smaller than that exits whole.
+ */
+export function trancheQty(symbol: string, held: number, share = LADDER_SHARE): number {
+  if (!(held > 0)) return 0;
+  const raw = held * share;
+  if (assetClass(symbol) === 'crypto') {
+    const qty = Math.floor(raw * 1e6) / 1e6;
+    return qty > 0 ? qty : held;
+  }
+  const qty = Math.floor(raw);
+  return qty > 0 ? qty : Math.min(held, 1);
+}
+
+/**
  * `[+15%, +30%, sell target]` off the average cost. The last rung is the user's own sell
  * zone, so the ladder cannot contradict the target they set — and while holding, the
  * ladder *is* the sell side. Rungs below cost would just be losses dressed as targets,

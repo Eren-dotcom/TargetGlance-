@@ -1,7 +1,8 @@
-import { PRESETS, knownSymbols } from '../core/symbols.ts';
+import { PRESETS } from '../core/symbols.ts';
+import { asAlerts, asBook, asTargetMap, asTrades, asWatchlist } from '../core/state.ts';
 import { defaultTargets, nudge, quickBuy, quickSell, quickSets, QUICK_STEPS, stepFor, validateTargets, type Targets } from '../core/targets.ts';
 import { freshAlertState, pollAlert, snooze, type Alert, type AlertMap } from '../core/alerts.ts';
-import { LADDER_SHARE, START_CASH, emptyBook, fmtQty, ladderFor, sizeQty, sell, buy, type Book, type Trade } from '../core/paper.ts';
+import { START_CASH, emptyBook, fmtQty, ladderFor, sizeQty, sell, buy, trancheQty, type Book, type Trade } from '../core/paper.ts';
 import { buildFrame, visibleSymbols, type Flash, type Filter, type ViewState, type ViewQuote } from './frame.ts';
 import { BOLD, NORMAL, hardwareFrame, looksUrgent } from './look.ts';
 import { connect, listen, render, type Gesture, type MenuAction } from './sdk.ts';
@@ -86,6 +87,12 @@ export class App {
   mono = lookFromUrl();
   /** Quick-set ladder index, so repeated taps cycle instead of resetting to the same place. */
   quickIdx = 1;
+  /**
+   * Set by `load()`: the first poll after a wake-up records where each price is instead of
+   * announcing it. A price already inside a zone has been there for a while, and greeting the
+   * wearer with a confirm button for a move they never saw is a phantom trade waiting to happen.
+   */
+  baseline = false;
 
   async boot() {
     // Each step is guarded: a dead bridge or a slow quote service must still leave a screen.
@@ -113,19 +120,25 @@ export class App {
   }
 
   async load() {
-    const [watchlist, targets, book, alerts, trades] = await Promise.all(STATE_KEYS.map((k) => api.get<any>(k)));
-    const stored = knownSymbols(watchlist ?? local<string[]>('watchlist') ?? PRESETS.Mixed!).slice(0, 6);
-    this.watchlist = stored.length ? stored : PRESETS.Mixed!;
-    this.targets = targets ?? local('targets') ?? {};
-    this.book = book ?? local('book') ?? emptyBook(START_CASH);
-    this.alerts = alerts ?? local('alerts') ?? {};
-    this.trades = trades ?? local('trades') ?? [];
+    // Keyed by name, never positional: a destructure once paired each payload with the
+    // wrong parser, so saved state silently loaded as defaults.
+    const stored = Object.fromEntries(
+      await Promise.all(STATE_KEYS.map(async (k) => [k, await api.get<unknown>(k)] as const)),
+    );
+    const pick = (key: StoreKey) => stored[key] ?? local<unknown>(key);
+    // Every field is checked: a malformed value must fall back, never blank the display.
+    this.watchlist = asWatchlist(pick('watchlist'), asWatchlist(PRESETS.Mixed!, PRESETS.Mixed!));
+    this.targets = asTargetMap(pick('targets'));
+    this.book = asBook(pick('book'));
+    this.alerts = asAlerts(pick('alerts'));
+    this.trades = asTrades(pick('trades'));
+    this.baseline = true;
   }
 
   /** Judge Mode owns the watchlist too, so it can preset-switch during a demo. */
   async syncConfig() {
-    const next = knownSymbols((await api.get<string[]>('watchlist')) ?? []);
-    if (next.length && next.join() !== this.watchlist.join()) {
+    const next = asWatchlist(await api.get<unknown>('watchlist'), this.watchlist);
+    if (next.join() !== this.watchlist.join()) {
       this.watchlist = next;
       this.sel = Math.min(this.sel, Math.max(0, next.length - 1));
       await this.poll(true);
@@ -153,7 +166,11 @@ export class App {
       if (!r.ok) throw new Error(String(r.status));
       this.quotes = (await r.json()) as ViewQuote[];
       for (const q of this.quotes) this.targetFor(q.symbol);
-      this.runAlerts();
+      // A judge simulation is the operator asking for this price on purpose: it is never a
+      // wake-up snapshot, even on the very first poll.
+      const baseline = this.baseline && !this.quotes.some((q) => q.simPct !== undefined);
+      this.baseline = false;
+      this.runAlerts(baseline);
     } catch {
       if (!silent) this.say('Quote service offline — is the dev server up?', 8000);
     } finally {
@@ -165,7 +182,7 @@ export class App {
   }
 
   /** Crossing-only: each symbol's previous zone decides whether this tick is news. */
-  runAlerts() {
+  runAlerts(baseline = false) {
     const now = Date.now();
     let dirty = false;
     for (const q of this.quotes) {
@@ -187,6 +204,7 @@ export class App {
         stop: holds ? t.stop : null,
         // A simulated move is the judge asking for this price, not a wild tick to wait out.
         force: q.simPct !== undefined,
+        baseline,
         now,
       });
       this.alerts[q.symbol] = state;
@@ -202,8 +220,8 @@ export class App {
     const price = a.price;
     if (a.zone === 'sell') {
       const held = this.book.positions[a.symbol]?.qty ?? 0;
-      // Stop or the last rung exits the lot; an earlier rung takes one third.
-      const qty = a.stop || a.final ? held : Math.max(Math.floor(held * LADDER_SHARE * 1e6) / 1e6, 0);
+      // Stop or the last rung exits the lot; an earlier rung takes one tranche.
+      const qty = a.stop || a.final ? held : trancheQty(a.symbol, held);
       const cost = qty * price;
       return {
         qty,
@@ -221,6 +239,12 @@ export class App {
   nextFlash() {
     if (this.flash || !this.queue.length) return;
     const a = this.queue.shift()!;
+    // A buy-zone tap while already long would average up into a losing position, not start
+    // a trade. The buy side means "start a position"; while holding, the ladder owns the row.
+    if (a.zone === 'buy' && (this.book.positions[a.symbol]?.qty ?? 0) > 0) {
+      this.nextFlash();
+      return;
+    }
     // A trade of zero is not a decision; a stale alert for a position that is already
     // closed would show a confirm button that does nothing.
     if (a.zone === 'sell' && !a.stop && (this.book.positions[a.symbol]?.qty ?? 0) <= 0) {

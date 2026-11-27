@@ -35,7 +35,8 @@ seed a portfolio, reset). Everything is one process on one port: the app and its
 share an origin, so there is no CORS and no second terminal.
 
 ```bash
-npm test             # 92 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page
+npm test             # 105 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page,
+                     #   state trust boundary — plus the 90 s demo played against the live server
 npm run probe        # can this machine reach Binance and Yahoo right now?
 npm run proxy        # OPTIONAL: same quote service on :8787 if you want it separate
 npm run pack         # build + evenhub pack → targetglance.ehpk
@@ -105,14 +106,18 @@ Per-row shading is not a thing on this hardware, and the preview reflects that.
 - Buys size to **5% of available cash**; if 5% is less than one share, one affordable share.
   Stocks round down to whole shares; crypto keeps 6 decimals.
 - Sells come from the ladder: **one third** of the position per rung, **the rest** at the final
-  rung or on a stop.
+  rung or on a stop. A tranche is cut in the asset's own lot size, so a stock ladder sells whole
+  shares and a one-share lot exits whole instead of offering a flash that trades zero.
+- The buy side means **start a position**. A buy-zone alert while you already hold is dropped
+  rather than averaging up; while holding, the ladder is the sell side.
 - Fills are the live price when you tap, never the target — no fantasy fills.
 - Average cost per symbol; realised PnL on sell, unrealised on hold; total = cash + market value.
 - **Undo for 5 s** restores the book, the journal and the alert state exactly.
 
 ## Alert rules
 
-- Crossings only. Sitting in a zone never re-alerts.
+- Crossings only. Sitting in a zone never re-alerts. The first poll after the glasses wake up is
+  a baseline: it records where each price is without announcing a zone the price was already in.
 - Judge simulation is applied at read time, so clearing it moves the price back immediately
   instead of waiting out the 10 s cache.
 - Hysteresis: leaving a zone needs a 0.25% move past its edge, so the boundary cannot flicker.
@@ -121,7 +126,10 @@ Per-row shading is not a thing on this hardware, and the preview reflects that.
   simulation skips that wait, because the judge is asking for the price on purpose.
 - Stops are checked first: a paper position below its stop alerts `STOP HIT` before any zone.
 - One flash on screen; up to 3 queued. Swipe = snooze for an hour.
-- Never a sell or stop alert on a flat book.
+- Never a sell or stop alert on a flat book, and never a countdown to a trade of zero.
+- Saved state is parsed at the edge (`src/core/state.ts`): a malformed value falls back instead
+  of blanking the glasses. `PUT` rejects prototype keys, over-deep JSON, an unknown session or a
+  simulation beyond ±90% with a **422**.
 
 ## Data
 

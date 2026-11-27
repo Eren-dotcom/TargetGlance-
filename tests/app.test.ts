@@ -98,6 +98,40 @@ describe('app wiring', () => {
     expect(app.flash).toBeNull();
   });
 
+  it('never averages up: a buy-zone flash is dropped while the book already holds', async () => {
+    const app = newApp();
+    await app.poll();
+    feed = { NVDA: 92 };
+    await app.poll();
+    await app.onGesture('click'); // start the position
+    const held = app.book.positions.NVDA!.qty;
+    expect(held).toBeGreaterThan(0);
+    app.undo = null; // the 5 s undo would otherwise answer the next tap instead of the market
+
+    // Price leaves the zone (above buy.high, below the first +15% rung) and falls back in.
+    feed = { NVDA: 100 };
+    await app.poll();
+    feed = { NVDA: 92 };
+    await app.poll();
+    expect(app.flash, 'a buy-zone flash while long would average up').toBeNull();
+    expect(app.screen).toBe('watch');
+    expect(app.book.positions.NVDA!.qty).toBe(held);
+    expect(app.trades.filter((t) => t.side === 'BUY')).toHaveLength(1);
+  });
+
+  it('never flashes a tranche of zero on a one-share lot', async () => {
+    const app = newApp();
+    app.book = buy(emptyBook(START_CASH), 'NVDA', 1, 100, 'zone', new Date()).book;
+    feed = { NVDA: 100 };
+    await app.poll();
+    // The first rung of a one-share lot is +15%.
+    feed = { NVDA: 116 };
+    await app.poll();
+    expect(app.screen).toBe('flash');
+    expect(app.flash?.zone).toBe('sell');
+    expect(app.flash!.qty).toBe(1);
+  });
+
   it('dismissing snoozes instead of trading', async () => {
     const app = newApp();
     feed = { NVDA: 92 };

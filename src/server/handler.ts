@@ -1,7 +1,12 @@
 import { SYMBOLS, knownSymbols } from '../core/symbols.ts';
 import { MAX_BODY, isStateKey, type Store } from './store.ts';
+import { validateWrite } from '../core/state.ts';
 import { RESET_JUDGE, judge, probe, quotesNow, type JudgeState } from './quotes.ts';
 import type { SessionOverride } from '../core/session.ts';
+
+const SESSIONS: SessionOverride[] = ['auto', 'LIVE', 'PRE', 'AH', 'CLOSED'];
+/** A simulation outside this band is not a market move; it is a way to overflow the UI. */
+const MAX_SIM_PCT = 90;
 
 export interface Req {
   method: string;
@@ -45,11 +50,16 @@ export async function handle(req: Req, store: Store): Promise<Res> {
     if (method === 'GET') return ok(store.get(key) ?? null);
     if (method === 'PUT') {
       if (req.body.length > MAX_BODY) return bad('body too large', 413);
+      let value: unknown;
       try {
-        return ok(store.set(key, JSON.parse(req.body || 'null')));
+        value = JSON.parse(req.body || 'null');
       } catch {
         return bad('body must be JSON');
       }
+      // Reject a bad shape at the door: storing it would only move the crash into the app.
+      const problem = validateWrite(key, value);
+      if (problem) return bad(problem, 422);
+      return ok(store.set(key, value));
     }
     return bad('method not allowed', 405);
   }
@@ -68,12 +78,17 @@ export async function handle(req: Req, store: Store): Promise<Res> {
     if (patch.resetState) store.reset();
     if (typeof patch.mock === 'boolean') judge.mock = patch.mock;
     if (typeof patch.forceStale === 'boolean') judge.forceStale = patch.forceStale;
-    if (patch.session) judge.session = patch.session as SessionOverride;
+    if (patch.session) judge.session = SESSIONS.includes(patch.session as SessionOverride) ? (patch.session as SessionOverride) : 'auto';
     if (patch.sim) {
-      // Only allowlisted symbols, only finite numbers: the sim table is another trust boundary.
+      // Only allowlisted symbols, only finite numbers inside a sane band: the sim table is
+      // another trust boundary, and 1e308 would overflow every formatted price.
       judge.sim = Object.fromEntries(
-        Object.entries(patch.sim).filter(([s, v]) => s in SYMBOLS && Number.isFinite(Number(v))),
-      ) as Record<string, number>;
+        Object.entries(patch.sim).flatMap(([s, v]) => {
+          const pct = Number(v);
+          if (!(s in SYMBOLS) || !Number.isFinite(pct) || Math.abs(pct) > MAX_SIM_PCT) return [];
+          return [[s, pct] as const];
+        }),
+      );
     }
     return ok(judge);
   }

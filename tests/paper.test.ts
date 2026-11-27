@@ -12,6 +12,7 @@ import {
   unrealized,
   ladderFor,
   LADDER_SHARE,
+  trancheQty,
 } from '../src/core/paper.ts';
 
 const now = new Date('2026-11-27T12:00:00Z');
@@ -90,6 +91,24 @@ describe('paper book', () => {
     // 4*(15) + 4*(30) + 4*(50)
     expect(realizedTotal(book)).toBe(380);
     expect(book.cash).toBeGreaterThan(START_CASH);
+  });
+
+  it('sells a ladder tranche in the asset own lot size, never a phantom fraction', () => {
+    // The mock run printed `Paper sell 1 NVDA` and then the book held 2.6667 shares,
+    // which the watch row rounded up to `hold 3`.
+    expect(trancheQty('NVDA', 4)).toBe(1);
+    expect(trancheQty('NVDA', 12)).toBe(4);
+    // One or two shares cannot be split by three; one whole share is the smallest honest lot.
+    expect(trancheQty('NVDA', 2)).toBe(1);
+    expect(trancheQty('NVDA', 1)).toBe(1);
+    // Crypto keeps its fractions, and a dust position still exits whole.
+    expect(trancheQty('SOL', 3)).toBe(1);
+    expect(trancheQty('SOL', 0.0004)).toBeCloseTo(0.0004 / 3, 6);
+    expect(trancheQty('NVDA', 0)).toBe(0);
+
+    let book = buy(emptyBook(), 'NVDA', 4, 100, 'zone', now).book;
+    book = sell(book, 'NVDA', trancheQty('NVDA', book.positions.NVDA!.qty), 120, 'zone', now).book;
+    expect(book.positions.NVDA!.qty).toBe(3);
   });
 
   it('clears the cost basis when a position is closed, so a rebuy starts clean', () => {

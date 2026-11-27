@@ -341,7 +341,8 @@ Range bar clamp at both ends and the zone edges · session labels at DST boundar
 alert crossing-only, no re-alert inside a zone, hysteresis, cooldown, queue, falling-knife hold ·
 buy arms sell and never auto-sells · PnL average cost, realised vs unrealised, undo restores
 exactly, cash never negative, whole-share rounding · target validation (`buy < sell`, positives,
-far-target warning) · voice parser (`140`, `92k`, `135-140`, symbol-only, junk) · quote fallback
+far-target warning) · state trust boundary (junk, prototype keys, deep nesting, unknown symbols
+dropped) · mock run over real HTTP · voice parser (`140`, `92k`, `135-140`, symbol-only, junk) · quote fallback
 (mock, stale, sim override, allowlist 400) · layout: every rendered line ≤ 576 px measured with
 `pretext`, so a long symbol can never wrap the glasses UI.
 
@@ -431,7 +432,42 @@ Also added: **G2 contextual menu** (Portfolio / Journal / Reset view), **temple 
 the mic with an on-glass prompt, and **one-step emphasis** — the container goes bold when a row
 needs the wearer, which is the only brightness difference the firmware really offers.
 
-## 18. Build order
+## 18. Round three, part two: the mock run, the attacks and what they caught
+
+The demo was played end to end against the **real** dev server, in a test that drives the
+actual `App` over real HTTP (`tests/mockrun.test.ts`, skipped automatically when `npm run dev`
+is not up). Boot → judge dips NVDA → tap buys → judge spikes → tap sells → portfolio →
+journal → undo → clear the sim. That one test found three things the unit suites could not:
+
+1. **Saved state never loaded.** `load()` destructured positionally against
+   `STATE_KEYS = ['targets','book','alerts','trades','watchlist']`, but the fields were read in
+   field order. Every stored payload went to the wrong parser and fell back to a default, so a
+   restart quietly reset the book and the zones. Now each key is read by name, and the mock run
+   asserts the restored value (`NVDA` sell `148-152`, not the default zone).
+2. **A malformed value blanked the glasses.** One non-array `watchlist` made `knownSymbols()`
+   throw inside `App.load()`, so the first frame never drew. `src/core/state.ts` is the single
+   trust boundary now: every stored value is parsed, unknown symbols dropped, quantities and
+   prices bounded, the journal capped at 10 and the watchlist at 12 with a known fallback.
+3. **A phantom sell tranche.** The flash said `Paper sell 1 NVDA` and the book sold `1.3333`,
+   then printed `hold 3` on a 2.6667-share position. Tranches are cut in the asset's own lot
+   size (`trancheQty`), and a one-share lot sells one share rather than a flash promising zero.
+
+Two smaller ones from the same run: a wake-up no longer announces a zone the price was already
+sitting in (the first poll after `load()` is a baseline, still overridden by a judge simulation),
+and a buy-zone flash is dropped while the book already holds — the ladder owns the row then, and
+averaging up is not a feature.
+
+### The API under attack
+
+`curl` against every route, before the fixes: traversal and `%2F` keys → 404/400, injected
+symbols → 400, wrong methods → 404/405, a 100 KB body → 413. But `{"__proto__":{…}}` and
+`{"constructor":{…}}` writes returned **200**, 2000-level nesting stored fine, `session:"EVIL"`
+was accepted, and `sim: 1e308` went into the cache. Fixed at the boundary: a forbidden-key set,
+a key-shape regex, a depth cap of 8, `session` restricted to the five real sessions, and a
+simulation banded to ±90% (`MAX_SIM_PCT`), because a 1e308 multiple is not a market move, it is
+a way to overflow the display. All of it returns **422**, and the legitimate writes still 200.
+
+## 19. Build order
 
 - [x] Analysis + plan + ponytail rules vendored (`AGENTS.md`, MIT)
 - [x] Scaffold: `package.json`, `tsconfig`, `vite.config.ts`, `app.json`, pages
@@ -443,6 +479,8 @@ needs the wearer, which is the only brightness difference the firmware really of
 - [x] README
 - [x] Round two: ladder, stops wired, hardware-honest preview, companion target table
 - [x] Round three: distinct mocks, sim at read time, SDK page validation, menu + temple hold
+- [x] Round three, part two: live mock run, keyed state load, trust boundary, API hardening
+- [x] 105 tests green · `tsc` clean · `vite build` clean · attack suite returns 422s
 
 ### What the build changed in this plan (found by writing it)
 

@@ -73,6 +73,12 @@ export interface PollInput {
   now: number;
   /** Judge Mode trigger: ignores cooldown and snooze so a rehearsal is one tap. */
   force?: boolean;
+  /**
+   * First poll after a wake-up: record where each price is, announce nothing. A price that is
+   * already inside a zone has been there a while, and a confirm button for a move the wearer
+   * never saw is a phantom trade waiting to happen.
+   */
+  baseline?: boolean;
 }
 
 export interface PollResult {
@@ -128,17 +134,25 @@ export function pollAlert(prev: AlertState, i: PollInput): PollResult {
 
   const level = zone === 'buy' ? 1 : Math.max(1, rungLevel(i.rungs, i.price));
   const triggered = zone !== prev.zone || level > prev.level;
+  const key = `${zone}${level}`;
   // `held` keeps counting inside the zone so a suppressed first tick can still fire on
   // the next poll — that is exactly the falling-knife hold.
   const state: AlertState = { ...prev, zone, level, lastPrice: i.price, held: prev.held + 1, pending: true };
 
-  // Nothing new at this rung, and nothing was suppressed earlier either: stay quiet.
-  if (!triggered && !prev.pending) return { state: { ...state, pending: false }, alert: null };
+  // A wake-up baseline arms the zone without claiming an alert on it, so the next real move
+  // (or the judge's deliberate one) is still news.
+  if (i.baseline && !i.force) {
+    return { state: { ...state, pending: false }, alert: null };
+  }
+
+  // Nothing new at this rung, and nothing was suppressed earlier either: stay quiet. A judge
+  // simulation is an instruction, not a tick, so it bypasses the crossing gate once per rung.
+  const forced = Boolean(i.force) && prev.lastKey !== key;
+  if (!triggered && !prev.pending && !forced) return { state: { ...state, pending: false }, alert: null };
 
   if (!i.force) {
     if (zone === 'sell' && !i.holds) return { state, alert: null };
     if (prev.snoozedUntil !== null && i.now < prev.snoozedUntil) return { state, alert: null };
-    const key = `${zone}${level}`;
     if (prev.lastKey === key && prev.lastAlertAt && i.now - prev.lastAlertAt < COOLDOWN_MS)
       return { state, alert: null };
     const needed = Math.abs(i.changePct) >= WILD_PCT ? 2 : 1;
