@@ -4,7 +4,7 @@ import { buildFrame, visibleSymbols, type ViewState } from '../src/g2/frame.ts';
 import { emptyBook, buy } from '../src/core/paper.ts';
 import { defaultTargets } from '../src/core/targets.ts';
 import { bar, rungMarks } from '../src/g2/bar.ts';
-import { hardwareFrame } from '../src/g2/look.ts';
+import { BOLD, NORMAL, hardwareFrame, looksUrgent } from '../src/g2/look.ts';
 
 /**
  * The glasses font is proportional and a fullwidth glyph (`─ ● █`) is a hard 20 px.
@@ -153,5 +153,31 @@ describe('hardware look', () => {
     expect(marked.length).toBeGreaterThan(1);
     expect(marked.every((l) => !l.rule)).toBe(true);
     expect(glass.lines.some((l) => l.rule)).toBe(true);
+  });
+});
+
+describe('emphasis', () => {
+  it('asks for the bold step only when a row needs the wearer', () => {
+    const calm = buildFrame({ ...base(), screen: 'watch' });
+    expect(looksUrgent(calm)).toBe(false);
+
+    const flash = buildFrame({
+      ...base(),
+      screen: 'flash',
+      flash: { symbol: 'NVDA', zone: 'buy', price: 119.4, changePct: -13.8, qty: 4, cost: 477.6, pctCash: 5 },
+    });
+    expect(looksUrgent(flash)).toBe(true);
+
+    // A row sitting in its zone is urgent even without a flash on screen.
+    const inZone = buildFrame({ ...base(), quotes: [{ ...base().quotes[0]!, price: 119.4 }] });
+    expect(looksUrgent(inZone)).toBe(true);
+  });
+
+  it('only ever asks for a brightness the SDK accepts', () => {
+    for (const level of [NORMAL, BOLD]) {
+      expect(Number.isInteger(level)).toBe(true);
+      expect(level).toBeGreaterThanOrEqual(0);
+      expect(level).toBeLessThanOrEqual(4);
+    }
   });
 });

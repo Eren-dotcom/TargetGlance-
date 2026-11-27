@@ -68,6 +68,8 @@ export interface PollInput {
   stop: number | null;
   /** Something to sell: a sell-zone flash on a flat book would be a dud screen. */
   holds: boolean;
+  /** Quantity held, so a flash can never plan a sale of zero. */
+  held?: number;
   now: number;
   /** Judge Mode trigger: ignores cooldown and snooze so a rehearsal is one tap. */
   force?: boolean;
@@ -94,7 +96,7 @@ export function rungLevel(rungs: number[], price: number): number {
  * of a broken paper position is never the moment to be clever about targets.
  */
 export function pollAlert(prev: AlertState, i: PollInput): PollResult {
-  if (i.holds && i.stop !== null && i.price <= i.stop) {
+  if (i.holds && (i.held ?? 0) > 0 && i.stop !== null && i.price <= i.stop) {
     const key = 'stop';
     const state: AlertState = { ...prev, zone: prev.zone, lastPrice: i.price, held: prev.held + 1 };
     const suppressed =

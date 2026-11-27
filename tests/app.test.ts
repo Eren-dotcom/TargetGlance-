@@ -218,6 +218,21 @@ describe('take-profit ladder and stop', () => {
     expect(app.trades[0]!.pnl).toBeLessThan(0);
   });
 
+  it('stays quiet when the price falls back toward the entry after a partial exit', async () => {
+    // Probed, not assumed: a partial sell keeps the average cost, so stepping back down
+    // must not re-flash a rung that was already taken on the way up.
+    const app = holding();
+    feed = { NVDA: 116 };
+    await app.poll();
+    expect(app.flash?.rung).toBe(115);
+    await app.onGesture('click'); // a third goes
+    await app.poll();
+    feed = { NVDA: 101 };
+    await app.poll();
+    expect(app.flash).toBeNull();
+    expect(app.screen).toBe('watch');
+  });
+
   it('a stop does not fire while flat', async () => {
     const app = newApp();
     feed = { NVDA: 78 };

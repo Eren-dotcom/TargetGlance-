@@ -405,7 +405,33 @@ guessing `-13 %`, copy-to-clipboard for the journal (a download is blocked in em
 explicit freshness text per row (`live now` / `stale 2m` / `mock`), and one shared price
 formatter (`src/core/format.ts`) after `g2/fmt.ts` drifted from the companion's copy.
 
-## 17. Build order
+## 17. Round three: what a second pass over real paths found
+
+1. **Mock prices moved in lockstep.** The mock wobble keyed off `symbol.length`, so BTC, ETH
+   and SOL all printed `+0.807%` — nobody believes three majors move together. Now a per-symbol
+   FNV hash seeds the wobble: `+2.5% / +0.7% / −0.9%`.
+2. **A simulation was baked into the cache.** Set a sim, and for the next 10 s a cached read
+   returned it; clear the sim, and the price stayed wrong until the cache expired. Sim is now
+   applied at read time (`simulate()`), so clearing it is instant.
+3. **The startup page was never validated.** A rejected page is a blank pair of glasses. The
+   exact payload `connect()` sends now runs through the SDK's own `validateEvenHubPageContainer`
+   in `tests/sdk.test.ts`, menu included.
+4. **A phantom zero-quantity stop could flash.** `holds` was derived from quantity, but the
+   alert engine now takes `held` explicitly and refuses a stop at 0, and `nextFlash()` drops a
+   queued sale for a position that is already closed.
+5. **Boot could leave a blank screen.** A failing state read, bridge or `#glass` mount aborted
+   `boot()` before the first draw. Each step is guarded now, and the first frame is drawn before
+   the first poll.
+6. **Assumption tested instead of shipped:** I suspected a partial take-profit would re-flash a
+   rung on the way back down to the entry price. A probe (`tests/app.test.ts`) showed the
+   average cost keeps rungs above the entry, so no phantom alert — the hypothetical fix was
+   reverted, the probe kept as a regression test.
+
+Also added: **G2 contextual menu** (Portfolio / Journal / Reset view), **temple hold** wired to
+the mic with an on-glass prompt, and **one-step emphasis** — the container goes bold when a row
+needs the wearer, which is the only brightness difference the firmware really offers.
+
+## 18. Build order
 
 - [x] Analysis + plan + ponytail rules vendored (`AGENTS.md`, MIT)
 - [x] Scaffold: `package.json`, `tsconfig`, `vite.config.ts`, `app.json`, pages
@@ -413,9 +439,10 @@ formatter (`src/core/format.ts`) after `g2/fmt.ts` drifted from the companion's 
 - [x] Server: sources, store, handler, standalone
 - [x] G2 view: frame, sdk, browser mirror
 - [x] Companion (Judge Mode)
-- [x] 84 tests green · `tsc` clean · `vite build` clean · dev server verified · `evenhub pack` verified
+- [x] 92 tests green · `tsc` clean · `vite build` clean · dev server verified · `evenhub pack` verified
 - [x] README
 - [x] Round two: ladder, stops wired, hardware-honest preview, companion target table
+- [x] Round three: distinct mocks, sim at read time, SDK page validation, menu + temple hold
 
 ### What the build changed in this plan (found by writing it)
 

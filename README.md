@@ -35,7 +35,7 @@ seed a portfolio, reset). Everything is one process on one port: the app and its
 share an origin, so there is no CORS and no second terminal.
 
 ```bash
-npm test             # 84 tests: alerts, ladder, PnL, parser, API, controller, layout
+npm test             # 92 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page
 npm run probe        # can this machine reach Binance and Yahoo right now?
 npm run proxy        # OPTIONAL: same quote service on :8787 if you want it separate
 npm run pack         # build + evenhub pack → targetglance.ehpk
@@ -69,6 +69,14 @@ permission is a host whitelist, so an unlisted host fails silently.
 **Gestures:** swipe up/down select · tap open/confirm · double-tap back (or cycle the
 `ALL/STOCKS/CRYPTO` filter on the watchlist) · long-press portfolio, then journal.
 On a laptop the same gestures are `↑ ↓ Enter Esc L`.
+
+**Contextual menu** on the glasses: `Portfolio` · `Journal` · `Reset view` (the long-press
+shortcut). **Temple hold** opens the mic and shows what to say; speech-to-text is not in this
+build, so the phrase box in Judge Mode does the parsing.
+
+**Emphasis on glass is one step:** the container is drawn at the default brightness normally and
+at the bold step when a row needs you (`ZONE HIT`, `STOP HIT`, a price sitting in a zone).
+Per-row shading is not a thing on this hardware, and the preview reflects that.
 
 ### The three ideas that make it more than a ticker
 
@@ -105,6 +113,8 @@ On a laptop the same gestures are `↑ ↓ Enter Esc L`.
 ## Alert rules
 
 - Crossings only. Sitting in a zone never re-alerts.
+- Judge simulation is applied at read time, so clearing it moves the price back immediately
+  instead of waiting out the 10 s cache.
 - Hysteresis: leaving a zone needs a 0.25% move past its edge, so the boundary cannot flicker.
 - 60 s cooldown **per rung**, so buy→sell and rung→rung are news, not repeats.
 - On a wild day (≥ 7%), the price must hold in the zone for a second poll. A Judge Mode

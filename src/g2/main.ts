@@ -3,8 +3,8 @@ import { defaultTargets, nudge, quickBuy, quickSell, quickSets, QUICK_STEPS, ste
 import { freshAlertState, pollAlert, snooze, type Alert, type AlertMap } from '../core/alerts.ts';
 import { LADDER_SHARE, START_CASH, emptyBook, fmtQty, ladderFor, sizeQty, sell, buy, type Book, type Trade } from '../core/paper.ts';
 import { buildFrame, visibleSymbols, type Flash, type Filter, type ViewState, type ViewQuote } from './frame.ts';
-import { hardwareFrame } from './look.ts';
-import { connect, render, type Gesture } from './sdk.ts';
+import { BOLD, NORMAL, hardwareFrame, looksUrgent } from './look.ts';
+import { connect, listen, render, type Gesture, type MenuAction } from './sdk.ts';
 import { mountMirror } from './mirror.ts';
 
 const POLL_MS = 5000;
@@ -88,11 +88,21 @@ export class App {
   quickIdx = 1;
 
   async boot() {
-    await this.load();
-    this.bridge = await connect((g) => (this.onGesture(g)));
+    // Each step is guarded: a dead bridge or a slow quote service must still leave a screen.
+    await this.load().catch(() => undefined);
+    this.bridge = await connect({
+      gesture: (g) => void this.onGesture(g),
+      menu: (a) => void this.onMenu(a),
+      hold: (on) => void this.onHold(on),
+    }).catch(() => null);
     // Keys drive the glasses gestures when no simulator is attached.
-    mountMirror(() => this.frame(), this.mirrorHost(), (g) => void this.onGesture(g));
-    await this.poll(true);
+    try {
+      mountMirror(() => this.frame(), this.mirrorHost(), (g) => void this.onGesture(g));
+    } catch {
+      // No #glass in the host page: the glasses are the only display, which is fine.
+    }
+    await this.draw().catch(() => undefined);
+    await this.poll(true).catch(() => undefined);
     setInterval(() => void this.poll(), POLL_MS);
     setInterval(() => void this.tick(), 1000);
     setInterval(() => void this.syncConfig(), 2000);
@@ -134,6 +144,7 @@ export class App {
     return this.targets[sym]!;
   }
 
+
   async poll(silent = false) {
     if (this.busy) return;
     this.busy = true;
@@ -162,13 +173,15 @@ export class App {
       if (!t) continue;
       const prev = this.alerts[q.symbol] ?? freshAlertState();
       const pos = this.book.positions[q.symbol];
-      const holds = (pos?.qty ?? 0) > 0;
+      const heldQty = pos?.qty ?? 0;
+      const holds = heldQty > 0;
       const { state, alert } = pollAlert(prev, {
         symbol: q.symbol,
         price: q.price,
         changePct: q.changePct,
         targets: t,
         holds,
+        held: heldQty,
         // A paper position's ladder steps off its average cost, so rungs survive a restart.
         rungs: holds && pos ? ladderFor(pos.avgCost, t.sell.low) : [],
         stop: holds ? t.stop : null,
@@ -208,6 +221,12 @@ export class App {
   nextFlash() {
     if (this.flash || !this.queue.length) return;
     const a = this.queue.shift()!;
+    // A trade of zero is not a decision; a stale alert for a position that is already
+    // closed would show a confirm button that does nothing.
+    if (a.zone === 'sell' && !a.stop && (this.book.positions[a.symbol]?.qty ?? 0) <= 0) {
+      this.nextFlash();
+      return;
+    }
     this.flash = {
       symbol: a.symbol,
       zone: a.zone,
@@ -305,7 +324,8 @@ export class App {
 
   async draw() {
     const f = this.frame();
-    if (this.bridge) await render(this.bridge, f);
+    // Brightness is a whole-container property, so it marks the moment, not a row.
+    if (this.bridge) await render(this.bridge, f, looksUrgent(f) ? BOLD : NORMAL);
   }
 
   async tick() {
@@ -393,6 +413,37 @@ export class App {
         }
     }
     this.nextFlash();
+    await this.draw();
+  }
+
+  /** Contextual menu: the same three things the gestures reach, one level less buried. */
+  async onMenu(action: MenuAction) {
+    if (action === 'portfolio') this.screen = 'portfolio';
+    else if (action === 'journal') this.screen = 'journal';
+    else {
+      this.screen = 'watch';
+      this.filter = 'ALL';
+      this.sel = 0;
+      this.say('View reset', 2000);
+    }
+    this.nextFlash();
+    await this.draw();
+  }
+
+  /**
+   * Temple held: open the glasses mic for the duration and tell the wearer what to say.
+   * shortcut: audio is captured but not transcribed — speech-to-text needs a key or a local
+   * Whisper, so the regex parser takes typed phrases instead (PLAN.md §3). Upgrade when a
+   * keyless STT exists on the host.
+   */
+  async onHold(on: boolean) {
+    if (!this.bridge) return;
+    const live = await listen(this.bridge, on);
+    if (on) {
+      this.say(live ? 'Listening... say "SOL buy 140 sell 180"' : 'Mic unavailable', 3000);
+    } else if (this.toast?.startsWith('Listening')) {
+      this.say('Heard nothing — type it in Judge Mode', 3000);
+    }
     await this.draw();
   }
 

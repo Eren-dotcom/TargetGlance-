@@ -6,6 +6,7 @@ import type { Session } from '../core/session.ts';
 import { ago, freshDot, money, money0, moveMark, pctText, px, signed, signedMoney, zoneText } from '../core/format.ts';
 import { bar, rungMarks } from './bar.ts';
 
+
 export const W = 576;
 export const H = 288;
 

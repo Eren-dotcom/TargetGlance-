@@ -31,11 +31,22 @@ export const STALE_MS = 60_000;
 
 const cache = new Map<string, Entry>();
 
-/** Deterministic mock: stable per symbol per minute, so the demo never flickers randomly. */
+/** Stable per-symbol hash, so neighbours do not move together. */
+function hash(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return (h >>> 0) / 4294967295;
+}
+
+/**
+ * Deterministic mock: stable per symbol per minute, so the demo never flickers randomly
+ * and two crypto majors never show the same percentage.
+ */
 function mockQuote(symbol: string, now: Date): Quote {
   const base = SYMBOLS[symbol]?.mock ?? 100;
   const bucket = Math.floor(now.getTime() / 60_000);
-  const wobble = ((Math.sin(bucket + symbol.length * 7.3) + 1) / 2 - 0.5) * 0.04;
+  const seed = hash(symbol) * 1000 + bucket;
+  const wobble = (Math.sin(seed) / 2) * 0.05;
   const price = round(base * (1 + wobble));
   return {
     symbol,
@@ -51,8 +62,7 @@ function mockQuote(symbol: string, now: Date): Quote {
 
 async function fetchLive(symbol: string, now: Date): Promise<Quote & { marketState?: string }> {
   const def = SYMBOLS[symbol]!;
-  const attempt = def.class === 'crypto' ? binanceTicker(def.binance ?? symbol) : yahooTicker(def.yahoo ?? symbol);
-  const t = await attempt;
+  const t = await (def.class === 'crypto' ? binanceTicker(def.binance ?? symbol) : yahooTicker(def.yahoo ?? symbol));
   const price = round(t.price);
   const prevClose = round(t.prevClose);
   return {
@@ -77,34 +87,43 @@ function withSession(q: Quote, now: Date, marketState?: string): Quote & { sessi
 }
 
 /**
+ * A Judge simulation is applied at read time, not baked into the cache: clearing a sim has
+ * to move the price back immediately, and a cached quote must not dodge the override.
+ */
+function simulate(q: Quote): Quote {
+  const pct = judge.sim[q.symbol];
+  if (!pct) return q;
+  const price = round(withSim({ price: q.price, prevClose: q.prevClose }, pct).price);
+  return {
+    ...q,
+    price,
+    changePct: q.prevClose > 0 ? round(((price - q.prevClose) / q.prevClose) * 100) : 0,
+    simPct: pct,
+  };
+}
+
+/**
  * One symbol, one quote. Trust order: judge mock → cache → live → last known good →
  * deterministic mock. Never throws, never returns nothing: the caller always has a row.
  */
 export async function quoteFor(symbol: string, now = new Date()): Promise<Quote & { session: Session }> {
-  if (judge.mock) return withSession({ ...mockQuote(symbol, now), stale: judge.forceStale }, now);
+  if (judge.mock) {
+    return withSession({ ...mockQuote(symbol, now), stale: judge.forceStale }, now);
+  }
 
   const hit = cache.get(symbol);
-  if (hit && now.getTime() - hit.at < CACHE_MS) return withSession(hit.quote, now);
+  if (hit && now.getTime() - hit.at < CACHE_MS) return withSession(simulate(hit.quote), now);
 
   try {
     const q = await fetchLive(symbol, now);
-    const simPct = judge.sim[symbol];
-    if (simPct) {
-      const t = withSim({ price: q.price, prevClose: q.prevClose }, simPct);
-      q.price = round(t.price);
-      q.changePct = q.prevClose > 0 ? round(((q.price - q.prevClose) / q.prevClose) * 100) : 0;
-      q.simPct = simPct;
-    }
-    q.stale = false;
     cache.set(symbol, { quote: q, at: now.getTime() });
-    return withSession(q, now, q.marketState);
+    return withSession(simulate(q), now, q.marketState);
   } catch {
     if (hit) {
       // Keep the last real price but say so: a stale badge beats a blank row.
-      return withSession({ ...hit.quote, stale: true, simPct: judge.sim[symbol] }, now);
+      return withSession(simulate({ ...hit.quote, stale: true }), now);
     }
-    const m = mockQuote(symbol, now);
-    return withSession({ ...m, stale: judge.forceStale }, now);
+    return withSession(simulate({ ...mockQuote(symbol, now), stale: judge.forceStale }), now);
   }
 }
 

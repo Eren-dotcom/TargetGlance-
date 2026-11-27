@@ -64,6 +64,30 @@ describe('api', () => {
     expect(q.simPct).toBe(-13);
   });
 
+  it('gives every symbol its own mock move, so majors do not move in lockstep', async () => {
+    await call('POST', '/api/judge', JSON.stringify({ mock: true }));
+    const quotes = (await call('GET', '/api/quotes?symbols=BTC,ETH,SOL,XRP')).json as any[];
+    const pcts = quotes.map((q) => q.changePct);
+    expect(new Set(pcts).size).toBe(pcts.length);
+  });
+
+  it('applies a simulation to an already cached quote, and clears it immediately', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({ ok: true, json: async () => ({ lastPrice: '100', prevClosePrice: '100' }) } as any),
+    );
+    const first = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    expect(first[0].price).toBe(100);
+    // Second read comes from the 10 s cache: the sim must still land on it.
+    await call('POST', '/api/judge', JSON.stringify({ sim: { SOL: -20 } }));
+    const simulated = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    expect(simulated[0].price).toBe(80);
+    // Clearing the sim must move the price back at once, not after the cache expires.
+    await call('POST', '/api/judge', JSON.stringify({ sim: {} }));
+    const cleared = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    expect(cleared[0].price).toBe(100);
+    expect(cleared[0].patch).toBeUndefined();
+  });
+
   it('ignores junk keys in the judge simulation', async () => {
     await call('POST', '/api/judge', JSON.stringify({ sim: { NOTREAL: 5, SOL: 'x' } }));
     expect(judge.sim).toEqual({});

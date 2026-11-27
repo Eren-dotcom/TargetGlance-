@@ -109,14 +109,16 @@ describe('alert state machine', () => {
   });
 
   it('fires a stop before anything else, and stops the lot', () => {
-    const r = step(freshAlertState(), 108, { holds: true, stop: 110, changePct: -12 });
+    const r = step(freshAlertState(), 108, { holds: true, held: 4, stop: 110, changePct: -12 });
     expect(r.alert).toMatchObject({ zone: 'sell', stop: true, price: 108 });
     // The same stop does not repeat inside the cooldown.
-    const again = step(r.state, 105, { holds: true, stop: 110, now: T0 + 5000 });
+    const again = step(r.state, 105, { holds: true, held: 4, stop: 110, now: T0 + 5000 });
     expect(again.alert).toBeNull();
   });
 
   it('never calls a stop when there is nothing to sell', () => {
+    // `holds` true with a phantom zero quantity must not flash either.
+    expect(step(freshAlertState(), 108, { holds: true, held: 0, stop: 110 }).alert?.stop).toBeUndefined();
     const r = step(freshAlertState(), 108, { holds: false, stop: 110 });
     expect(r.alert?.stop).toBeUndefined();
     expect(r.alert?.zone).toBe('buy'); // still a normal buy-zone hit
