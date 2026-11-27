@@ -1,0 +1,10 @@
+node_modules
+dist
+.data
+*.ehpk
+.DS_Store
+.env
+.env.local
+
+# release archive built by `npm run zip`
+artifacts/*.zip

@@ -1,0 +1,151 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { handle } from '../src/server/handler.ts';
+import { createStore } from '../src/server/store.ts';
+import { judge, clearCache, clearHistoryCache } from '../src/server/quotes.ts';
+import { RANGE_SPEC } from '../src/core/candles.ts';
+
+const store = () => createStore('/tmp/targetglance-test-state.json');
+const call = (method: string, path: string, body = '') => {
+  const url = new URL(path, 'http://local');
+  return handle({ method, pathname: url.pathname, query: url.searchParams, body }, store());
+};
+
+describe('api', () => {
+  beforeEach(async () => {
+    await call('POST', '/api/judge', JSON.stringify({ reset: true, resetState: true }));
+    clearCache();
+    clearHistoryCache();
+    vi.unstubAllGlobals();
+  });
+
+  it('answers health', async () => {
+    const r = await call('GET', '/health');
+    expect(r.status).toBe(200);
+    expect((r.json as any).ok).toBe(true);
+  });
+
+  it('rejects a request without symbols and one with only unknown symbols', async () => {
+    expect((await call('GET', '/api/quotes')).status).toBe(400);
+    expect((await call('GET', '/api/quotes?symbols=FAKE,ALSOFAKE')).status).toBe(400);
+  });
+
+  it('falls back to a mock quote when every upstream is unreachable', async () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
+    const r = await call('GET', '/api/quotes?symbols=BTC,NVDA');
+    expect(r.status).toBe(200);
+    const quotes = r.json as any[];
+    expect(quotes).toHaveLength(2);
+    for (const q of quotes) {
+      expect(q.mock).toBe(true);
+      expect(q.price).toBeGreaterThan(0);
+      expect(['24-7', 'LIVE', 'PRE', 'AH', 'CLOSED']).toContain(q.session);
+    }
+  });
+
+  it('uses a live Binance answer for crypto and labels the source', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ lastPrice: '142.55', prevClosePrice: '145.00', priceChange: '-2.45' }),
+      } as any),
+    );
+    const [q] = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    expect(q.source).toBe('binance');
+    expect(q.price).toBe(142.55);
+    expect(q.mock).toBe(false);
+    expect(q.changePct).toBeCloseTo(-1.69, 1);
+  });
+
+  it('layers a judge simulation over the live price', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({ ok: true, json: async () => ({ lastPrice: '142.55', prevClosePrice: '145' }) } as any),
+    );
+    await call('POST', '/api/judge', JSON.stringify({ sim: { SOL: -13 } }));
+    const [q] = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    expect(q.price).toBeCloseTo(124.02, 1);
+    expect(q.simPct).toBe(-13);
+  });
+
+  it('gives every symbol its own mock move, so majors do not move in lockstep', async () => {
+    await call('POST', '/api/judge', JSON.stringify({ mock: true }));
+    const quotes = (await call('GET', '/api/quotes?symbols=BTC,ETH,SOL,XRP')).json as any[];
+    const pcts = quotes.map((q) => q.changePct);
+    expect(new Set(pcts).size).toBe(pcts.length);
+  });
+
+  it('applies a simulation to an already cached quote, and clears it immediately', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({ ok: true, json: async () => ({ lastPrice: '100', prevClosePrice: '100' }) } as any),
+    );
+    const first = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    expect(first[0].price).toBe(100);
+    // Second read comes from the 10 s cache: the sim must still land on it.
+    await call('POST', '/api/judge', JSON.stringify({ sim: { SOL: -20 } }));
+    const simulated = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    expect(simulated[0].price).toBe(80);
+    // Clearing the sim must move the price back at once, not after the cache expires.
+    await call('POST', '/api/judge', JSON.stringify({ sim: {} }));
+    const cleared = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    expect(cleared[0].price).toBe(100);
+    expect(cleared[0].patch).toBeUndefined();
+  });
+
+  it('ignores junk keys in the judge simulation', async () => {
+    await call('POST', '/api/judge', JSON.stringify({ sim: { NOTREAL: 5, SOL: 'x' } }));
+    expect(judge.sim).toEqual({});
+  });
+
+  it('stores and reads state, and rejects unknown keys and non-JSON', async () => {
+    expect((await call('PUT', '/api/state/book', '{"cash":5}')).status).toBe(200);
+    expect((await call('GET', '/api/state/book')).json).toEqual({ cash: 5 });
+    expect((await call('GET', '/api/state/nope')).status).toBe(400);
+    expect((await call('PUT', '/api/state/book', 'not json')).status).toBe(400);
+  });
+
+  it('caps oversized bodies', async () => {
+    const big = JSON.stringify({ x: 'a'.repeat(70_000) });
+    expect((await call('PUT', '/api/state/trades', big)).status).toBe(413);
+  });
+
+  it('serves candles that are bars, not junk, on every range', async () => {
+    const r = await call('GET', '/api/candles?symbols=BTC,NVDA&range=1D');
+    expect(r.status).toBe(200);
+    const out = r.json as any[];
+    expect(out.map((h) => h.symbol)).toEqual(['BTC', 'NVDA']);
+    for (const h of out) {
+      expect(h.range).toBe('1D');
+      expect(h.candles.length).toBeGreaterThan(10);
+      // Same bar shape the chart relies on: body inside wick, positive prices.
+      for (const c of h.candles) {
+        expect(c.h).toBeGreaterThanOrEqual(c.l);
+        expect(c.o).toBeGreaterThan(0);
+        expect(c.c).toBeGreaterThan(0);
+      }
+      expect(Number.isFinite(h.candles.at(-1).c)).toBe(true);
+    }
+  });
+
+  it('rejects an unknown range and an unknown symbol instead of fetching anything', async () => {
+    expect((await call('GET', '/api/candles?symbols=BTC&range=9Y')).status).toBe(400);
+    expect((await call('GET', '/api/candles?symbols=EVIL')).status).toBe(400);
+    expect((await call('GET', '/api/candles')).status).toBe(400);
+  });
+
+  it('ends the history on the quote above it, simulation included', async () => {
+    const [plain] = (await call('GET', '/api/candles?symbols=SOL&range=1D')).json as any[];
+    await call('POST', '/api/judge', JSON.stringify({ sim: { SOL: 12 } }));
+    const [simmed] = (await call('GET', '/api/candles?symbols=SOL&range=1D')).json as any[];
+    const [quote] = (await call('GET', '/api/quotes?symbols=SOL')).json as any[];
+    // A simulated price must not leave the chart ending somewhere the row does not.
+    expect(simmed.candles.at(-1).c).toBe(quote.price);
+    expect(simmed.candles.at(-1).c).toBeGreaterThan(plain.candles.at(-1).c);
+  });
+
+  it('gives the demo a deterministic history when the judge forces mock', async () => {
+    await call('POST', '/api/judge', JSON.stringify({ mock: true }));
+    const [h] = (await call('GET', '/api/candles?symbols=NVDA&range=5D')).json as any[];
+    expect(h.mock).toBe(true);
+    expect(h.step).toBe('30m');
+    expect(h.candles.length).toBe(RANGE_SPEC['5D'].bars);
+  });
+});

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TargetGlance · G2</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        background: #0b0f0d; color: #cfe8d8;
+        font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      main { display: grid; gap: 14px; padding: 24px; }
+      h1 { margin: 0; font-size: 13px; letter-spacing: .18em; color: #6f8f7d; font-weight: 600; }
+      /* 576×288 with 8 px padding and the firmware's 27 px line: 10 lines fit exactly. */
+      #glass {
+        width: 576px; height: 288px; padding: 8px;
+        background: #05100a; border: 1px solid #1d3a2a; border-radius: 10px;
+        box-shadow: 0 0 60px rgba(52, 211, 153, .12) inset;
+        overflow: hidden; position: relative;
+      }
+      .glass-frame { margin: 0; font: 11.8px/27px ui-monospace, Menlo, monospace; white-space: pre; }
+      .glass-line { height: 27px; overflow: hidden; color: #b9d8c6; }
+      .glass-line.lvl-1 { color: #5f7d6c; }
+      .glass-line.lvl-2 { color: #8fb3a0; }
+      .glass-line.lvl-3 { color: #cfe8d8; }
+      .glass-line.lvl-4 { color: #eafff3; font-weight: 700; }
+      .glass-line.rule { border-top: 1px solid #1d3a2a; }
+      .hint { color: #5f7d6c; max-width: 576px; }
+      .hint kbd { color: #b9d8c6; border: 1px solid #264a37; border-radius: 4px; padding: 0 4px; }
+      .hint a { color: #6fdca6; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>TARGETGLANCE · EVEN G2 · 576×288</h1>
+      <div id="glass"></div>
+      <p class="hint">
+        <kbd>↑</kbd><kbd>↓</kbd> swipe · <kbd>Enter</kbd> tap · <kbd>Esc</kbd> double-tap · <kbd>L</kbd> long-press.<br />
+        Judge Mode &amp; target setup: <a href="/companion.html">companion.html</a>
+      </p>
+    </main>
+    <script type="module" src="/src/g2/main.ts"></script>
+  </body>
+</html>

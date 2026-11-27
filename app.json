@@ -1,0 +1,17 @@
+{
+  "package_id": "com.targetglance.g2",
+  "edition": "202601",
+  "name": "TargetGlance",
+  "version": "0.1.0",
+  "min_app_version": "2.2.10",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Fetches public quote data for your watchlist from the TargetGlance quote service.",
+      "whitelist": ["https://hub.evenrealities.com"]
+    }
+  ],
+  "supported_languages": ["en"]
+}
