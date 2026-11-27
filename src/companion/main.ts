@@ -35,6 +35,7 @@ async function loadAll() {
   renderTargets();
   renderChartSymbols();
   void renderChart();
+  void renderProviders();
   renderSim();
   renderToggles();
 }
@@ -85,6 +86,34 @@ function moveTo(sym: string, zone: 'buy' | 'sell'): number | null {
   if (!q || !t || !q.price) return null;
   const dest = zone === 'buy' ? t.buy.high * 0.995 : t.sell.low * 1.005;
   return Math.round(((dest / q.price - 1) * 100) * 10) / 10;
+}
+
+/**
+ * Keys are optional, so this table must read as information, not as a setup warning. It
+ * shows a mask and the free-tier limit, because the limit is the reason a key exists.
+ */
+async function renderProviders() {
+  let s: any = null;
+  try {
+    s = await fetch('/api/providers').then((r) => r.json());
+  } catch {
+    s = null;
+  }
+  const body = $('providers');
+  if (!s) {
+    body.replaceChildren(Object.assign(document.createElement('tr'), { innerHTML: '<td colspan="4" class="dim">provider status unavailable</td>' }));
+    return;
+  }
+  body.replaceChildren(
+    ...(s.providers as any[]).map((p) => {
+      const tr = document.createElement('tr');
+      const state = p.configured
+        ? '<span class="good">key loaded</span>'
+        : '<span class="dim">keyless</span>';
+      tr.innerHTML = `<td>${p.label}${s.provider === p.name ? ' <span class="tag">preferred</span>' : ''}</td><td>${p.mask ?? '<span class="dim">—</span>'}</td><td class="dim">${p.freeTier}</td><td>${state}</td>`;
+      return tr;
+    }),
+  );
 }
 
 /**

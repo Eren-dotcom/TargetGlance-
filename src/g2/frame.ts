@@ -24,6 +24,8 @@ export interface ViewQuote {
   ts: string;
   /** Judge Mode forced this price: the crossing is deliberate, so it must fire now. */
   simPct?: number;
+  /** Why a row is not live (key rejected, rate limit, unreachable) — short and human. */
+  reason?: string;
 }
 
 export interface Flash {
@@ -122,6 +124,20 @@ function visible(s: ViewState): string[] {
   );
 }
 
+/**
+ * A fallback price must say why, in the four characters a 576 px row has left. The full
+ * sentence lives in Judge Mode; the glass shows the one word that matters.
+ */
+export const shortWhy = (reason?: string): string => {
+  const r = (reason ?? '').toLowerCase();
+  if (!r) return 'mock';
+  if (r.includes('rate') || r.includes('429')) return 'limit';
+  if (r.includes('401') || r.includes('403') || r.includes('key')) return 'key';
+  if (r.includes('last known')) return 'stale';
+  if (r.includes('unreach') || r.includes('network')) return 'off';
+  return 'mock';
+};
+
 const pricesOf = (s: ViewState): Record<string, number> =>
   Object.fromEntries(s.quotes.map((q) => [q.symbol, q.price]));
 
@@ -158,7 +174,9 @@ function watch(s: ViewState): Line[] {
       inZone === 'buy' ? '' : `buy ${zoneText(t.buy.low, t.buy.high)}`,
       pos && pos.qty > 0 ? `hold ${fmtQty(sym, pos.qty)} ${signedMoney((q.price - pos.avgCost) * pos.qty)}` : pos ? 'flat' : '',
       // The dot says stale at a glance; this says by how much, which is what judges ask.
-      q.mock ? 'mock' : `${q.stale ? 'stale' : 'live'} ${ago(q.ts, s.now)}`,
+      q.mock
+        ? shortWhy(q.reason)
+        : `${q.stale ? 'stale' : 'live'} ${ago(q.ts, s.now)}`,
     ].filter(Boolean);
     lines.push({
       text: spread(`   ${parts.join(' · ')}`, ladder.length ? rungMarks(reached, ladder.length) : ''),
@@ -247,6 +265,7 @@ function detail(s: ViewState): Line[] {
       level: 1,
     },
     { text: clip(`  buy ${zoneText(t.buy.low, t.buy.high)}   sell ${zoneText(t.sell.low, t.sell.high)}`), level: 3 },
+    ...(q.reason ? [{ text: clip(`  ${q.reason.slice(0, 64)}`), level: 1 as const }] : []),
     {
       text: spread(
         `  ${pos && pos.qty > 0 ? `hold ${fmtQty(sym, pos.qty)} avg ${px(pos.avgCost)}` : 'flat'}${t.stop === null ? '' : `   stop ${px(t.stop)}`}`,

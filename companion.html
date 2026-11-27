@@ -112,6 +112,16 @@
           <button id="probe">Probe upstreams</button>
           <span id="probeOut" class="dim"></span>
         </div>
+        <h2 style="margin-top:14px">LIVE DATA KEYS (OPTIONAL — THE APP RUNS WITHOUT ONE)</h2>
+        <table>
+          <thead><tr><th>provider</th><th>key</th><th>free tier</th><th>status</th></tr></thead>
+          <tbody id="providers"></tbody>
+        </table>
+        <div class="dim" style="margin-top:6px;font-size:11px">
+          Set on the <b>server</b> only: <code>TARGETGLANCE_KEY_FINNHUB</code>, <code>…_TWELVEDATA</code>,
+          <code>…_POLYGON</code>. The key is never bundled, never returned by an API and never logged —
+          this table shows a mask. Test keys at <a style="color:var(--accent)" href="/health">/api/providers</a>.
+        </div>
       </section>
 
       <section>

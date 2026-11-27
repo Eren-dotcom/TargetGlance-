@@ -1,16 +1,24 @@
 /** One quote for one symbol, as the UI and the alert engine see it. */
+/**
+ * Where the price came from. The three keyed providers are optional: without a key they
+ * are never tried, and the keyless pair behaves exactly as it always has.
+ */
+export type QuoteSource = 'finnhub' | 'twelvedata' | 'polygon' | 'binance' | 'yahoo' | 'mock';
+
 export interface Quote {
   symbol: string;
   price: number;
   prevClose: number;
   changePct: number;
-  source: 'binance' | 'yahoo' | 'mock';
+  source: QuoteSource;
   /** True when the price came from a live source but is older than the staleness window. */
   stale: boolean;
   /** True when no upstream answered and this is the deterministic fallback. */
   mock: boolean;
   /** Judge Mode simulated move, percent. */
   simPct?: number;
+  /** Why this row is not a live price, in words a human can act on (never a key). */
+  reason?: string;
   ts: string;
 }
 

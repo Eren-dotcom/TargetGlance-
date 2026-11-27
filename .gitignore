@@ -3,3 +3,5 @@ dist
 .data
 *.ehpk
 .DS_Store
+.env
+.env.local

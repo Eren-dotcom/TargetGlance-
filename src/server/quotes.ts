@@ -11,6 +11,7 @@ import {
   type Quote,
 } from '../core/quotes.ts';
 import { RANGE_SPEC, mockCandles, normalizeCandles, type Candle, type History, type Range } from '../core/candles.ts';
+import { explain, providers, type ProviderSpec } from './provider.ts';
 
 export interface JudgeState {
   mock: boolean;
@@ -63,9 +64,7 @@ function mockQuote(symbol: string, now: Date): Quote {
   };
 }
 
-async function fetchLive(symbol: string, now: Date): Promise<Quote & { marketState?: string }> {
-  const def = SYMBOLS[symbol]!;
-  const t = await (def.class === 'crypto' ? binanceTicker(def.binance ?? symbol) : yahooTicker(def.yahoo ?? symbol));
+const quoteOf = (symbol: string, t: { price: number; prevClose: number; marketState?: string }, source: Quote['source'], now: Date): Quote & { marketState?: string } => {
   const price = round(t.price);
   const prevClose = round(t.prevClose);
   return {
@@ -73,12 +72,42 @@ async function fetchLive(symbol: string, now: Date): Promise<Quote & { marketSta
     price,
     prevClose,
     changePct: prevClose > 0 ? round(((price - prevClose) / prevClose) * 100) : 0,
-    source: def.class === 'crypto' ? 'binance' : 'yahoo',
+    source,
     stale: false,
     mock: false,
     ts: now.toISOString(),
     ...(t.marketState ? { marketState: t.marketState } : {}),
   };
+};
+
+/**
+ * Trust order: a configured key first (it is the one with a contract), then the keyless
+ * pair. Each failure is recorded so the fallback can say *why* it is not live — a mock
+ * price with no reason is how a demo lies to a judge.
+ */
+async function fetchLive(symbol: string, now: Date): Promise<Quote & { marketState?: string; reason?: string }> {
+  const def = SYMBOLS[symbol]!;
+  const reasons: string[] = [];
+
+  for (const p of providers() as ProviderSpec[]) {
+    if (!p.key) continue;
+    try {
+      const t = await p.quote(symbol);
+      const q = quoteOf(symbol, t, p.name, now);
+      return reasons.length ? { ...q, reason: `${p.label} live (after ${reasons.join('; ')})` } : q;
+    } catch (e) {
+      reasons.push(`${p.label}: ${explain(e)}`);
+    }
+  }
+
+  try {
+    const t = await (def.class === 'crypto' ? binanceTicker(def.binance ?? symbol) : yahooTicker(def.yahoo ?? symbol));
+    const q = quoteOf(symbol, t, def.class === 'crypto' ? 'binance' : 'yahoo', now);
+    return reasons.length ? { ...q, reason: `keyless fallback (${reasons.join('; ')})` } : q;
+  } catch (e) {
+    reasons.push(`${def.class === 'crypto' ? 'Binance' : 'Yahoo'}: ${explain(e)}`);
+    throw Object.assign(new Error(reasons.join('; ')), { reasons });
+  }
 }
 
 /** Session comes from the clock, unless Yahoo has a better opinion that hour. */
@@ -120,13 +149,16 @@ export async function quoteFor(symbol: string, now = new Date()): Promise<Quote 
   try {
     const q = await fetchLive(symbol, now);
     cache.set(symbol, { quote: q, at: now.getTime() });
-    return withSession(simulate(q), now, q.marketState);
-  } catch {
+    // `reason` is diagnostic, not a price property: it must not outlive this response.
+    const { reason, ...clean } = q;
+    return withSession(reason ? { ...simulate(clean), reason } : simulate(clean), now, q.marketState);
+  } catch (e) {
+    const why = (e as Error).message.slice(0, 120);
     if (hit) {
       // Keep the last real price but say so: a stale badge beats a blank row.
-      return withSession(simulate({ ...hit.quote, stale: true }), now);
+      return withSession(simulate({ ...hit.quote, stale: true, reason: `last known · ${why}` }), now);
     }
-    return withSession(simulate({ ...mockQuote(symbol, now), stale: judge.forceStale }), now);
+    return withSession(simulate({ ...mockQuote(symbol, now), stale: judge.forceStale, reason: why }), now);
   }
 }
 
@@ -149,6 +181,17 @@ export async function probe(): Promise<Record<string, string>> {
       }
     }),
   );
+  // Keys are optional; the probe says which are loaded and whether they actually work.
+  out.providers = providers().length ? providers().map((p) => p.name).join(', ') : 'none (keyless mode)';
+  for (const p of providers()) {
+    try {
+      // Prove the key on a symbol every provider serves: a crypto pair would fail wrong.
+      await p.quote('NVDA');
+      out[p.name] = 'ok';
+    } catch (e) {
+      out[p.name] = explain(e);
+    }
+  }
   return out;
 }
 

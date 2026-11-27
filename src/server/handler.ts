@@ -2,6 +2,7 @@ import { SYMBOLS, knownSymbols } from '../core/symbols.ts';
 import { MAX_BODY, isStateKey, type Store } from './store.ts';
 import { validateWrite } from '../core/state.ts';
 import { RESET_JUDGE, candlesFor, judge, probe, quotesNow, type JudgeState } from './quotes.ts';
+import { keyStatus } from './provider.ts';
 import { RANGES, type Range } from '../core/candles.ts';
 import type { SessionOverride } from '../core/session.ts';
 
@@ -55,6 +56,9 @@ export async function handle(req: Req, store: Store): Promise<Res> {
   }
 
   if (pathname === '/api/probe' && method === 'GET') return ok(await probe());
+
+  // Which providers are loaded — a mask, never the key. Safe for the companion page.
+  if (pathname === '/api/providers' && method === 'GET') return ok(keyStatus());
 
   if (pathname.startsWith('/api/state/')) {
     const key = pathname.slice('/api/state/'.length);

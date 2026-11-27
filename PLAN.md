@@ -526,7 +526,44 @@ What shipped:
    the quote's `prevClose` in hand and never passed it, so the chart and the header could state
    different day moves.
 
-## 20. Build order
+## 20. Round five: optional live keys, and honest failure
+
+The request was "add a live public key for better". Two honest findings first:
+
+1. **The app already runs on public endpoints.** Binance's ticker and Yahoo's chart endpoint
+   are keyless and public, which is why P0 has no key requirement. A key does not unlock
+   *more data* here; it unlocks a **contract**: a documented rate limit, a documented symbol
+   list, and an error that is distinguishable from a network blip.
+2. **The real defect was the silence.** Every failure — 401, 429, geo-block, DNS — collapsed
+   into `mock: true` with no explanation. That is the part that would embarrass a demo, and it
+   is fixable without any key at all.
+
+What shipped, with the key strictly optional:
+
+- `src/server/provider.ts` — Finnhub / Twelve Data / Polygon behind one interface, chosen by
+  `TARGETGLANCE_KEY_*` and `TARGETGLANCE_PROVIDER`. `ProviderError` carries a `FailureKind`
+  (`no-key`, `unauthorized`, `rate-limited`, `unsupported`, `unreachable`, `bad-payload`), and
+  `explain()` turns it into one sentence a human can act on.
+- The key never leaves the server: `keyStatus()` returns `••••` plus the last four, and
+  `/api/providers` is that function. Tested by asserting the secret string is absent from the
+  response.
+- Trust order is now: configured key → keyless pair → last known good → deterministic mock,
+  and the reason is carried on the quote (`reason`, diagnostic, never cached) and rendered:
+  `key` / `limit` / `stale` / `off` on a 576 px row, the full sentence on the detail screen.
+- Twelve Data answers **HTTP 200 with `{status:"error"}`** for a bad key; that is classified as
+  auth, not as a price of zero. Polygon refuses crypto on its free plan, so crypto goes to
+  Binance and says the provider does not serve it.
+
+### Defects this round found
+
+1. **`npm run proxy` would have crashed on any provider error.** `node --experimental-strip-types`
+   refuses TypeScript **parameter properties**, so `constructor(readonly kind: FailureKind, …)`
+   was a `SyntaxError` at load time — and the standalone server imports the quote chain. Caught
+   by running the proxy under the real flag instead of only under vitest. Assigned in the body.
+2. **A `reason` could have been cached as if it were a price.** It is stripped before the cache
+   write, so a recovered provider does not keep apologising for an outage that ended.
+
+## 21. Build order
 
 - [x] Analysis + plan + ponytail rules vendored (`AGENTS.md`, MIT)
 - [x] Scaffold: `package.json`, `tsconfig`, `vite.config.ts`, `app.json`, pages
@@ -540,6 +577,7 @@ What shipped:
 - [x] Round three: distinct mocks, sim at read time, SDK page validation, menu + temple hold
 - [x] Round three, part two: live mock run, keyed state load, trust boundary, API hardening
 - [x] 105 tests green · `tsc` clean · `vite build` clean · attack suite returns 422s
+- [x] Round five: optional live keys, classified failures, why-not-live on the row · 139 tests
 - [x] Round four: OHLC history, 288×144 candle bitmap, detail screen, text sparkline fallback,
       companion chart · 126 tests
 

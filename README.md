@@ -35,12 +35,34 @@ seed a portfolio, reset). Everything is one process on one port: the app and its
 share an origin, so there is no CORS and no second terminal.
 
 ```bash
-npm test             # 126 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page,
+npm test             # 139 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page,
                      #   state trust boundary, candle bitmap — plus the 90 s demo, live, over HTTP
 npm run probe        # can this machine reach Binance and Yahoo right now?
 npm run proxy        # OPTIONAL: same quote service on :8787 if you want it separate
 npm run pack         # build + evenhub pack → targetglance.ehpk
 ```
+
+### Live data keys (optional — the app runs without one)
+
+Every quote already comes from a keyless public endpoint. A key buys one thing those cannot
+promise: a **contract** — a documented rate limit, a documented symbol list, and an error you
+can tell apart from a network blip. Set it **on the server**, never in the bundle:
+
+```bash
+TARGETGLANCE_KEY_FINNHUB=…      npm run dev    # 60 req/min free, US + major listings
+TARGETGLANCE_KEY_TWELVEDATA=…   npm run dev    # 8 req/min free, global incl. NSE/BSE
+TARGETGLANCE_KEY_POLYGON=…      npm run dev    # 5 req/min free, US only, delayed
+TARGETGLANCE_PROVIDER=twelvedata npm run dev   # pick one when several keys are set
+```
+
+- The key is read on the server, sent only to the vendor, and **never** returned by an API,
+  written to a log or bundled. `GET /api/providers` answers with a mask (`••••9999`).
+- Trust order: the configured key → the keyless pair (Binance / Yahoo) → the last known good
+  price → the deterministic mock. Each step is recorded, so a fallback row says **why** it is
+  not live: `key`, `limit`, `stale` or `off` on the glass, the full sentence on the detail
+  screen and in Judge Mode. A price with no reason is how a demo lies to a judge.
+- Free tiers are shown next to each key in Judge Mode, because "8 req/min" is the reason the
+  10 s cache exists and the reason a key is not a magic upgrade.
 
 ### In the Even Hub simulator
 
@@ -94,7 +116,8 @@ Per-row shading is not a thing on this hardware, and the preview reflects that.
 
 ### Honesty features (they matter to judges)
 
-- `LIVE / DELAYED / STALE / MOCK` on every row, with the age of the tick.
+- `LIVE / DELAYED / STALE / MOCK` on every row, with the age of the tick — and when a row is
+  not live, the reason in one word (`key` / `limit` / `stale` / `off`) rather than a silent mock.
 - `LIVE / PRE / AH / CLOSED / 24-7` per asset, DST-correct for New York.
 - `PAPER` in the header, `(paper only)` on stops, and every fill in the journal.
 - Alerts are **in-session**: they fire while the app is open, plus the Judge Mode trigger.
