@@ -1,0 +1,42 @@
+TargetGlance — buy-zone / sell-zone alerts for Even G2 (paper trading, no exchange keys)
+=====================================================================================
+
+Everything is one process on one port. Two commands:
+
+    npm install
+    npm run dev          ->  http://localhost:5173            (the glasses app)
+                             http://localhost:5173/companion.html  (Judge Mode + big chart)
+
+Checks (Node 20+ is enough; the suite is 146 tests):
+
+    npm test             # unit + the 90 s demo against the live dev server
+    npx tsc --noEmit     # types
+    npm run build        # production bundle in dist/
+    npm run pack         # build + evenhub pack -> targetglance.ehpk
+
+Keys are OPTIONAL — the app runs keyless on public data. To use a provider key, export it
+server-side first (never in the bundle):
+
+    TARGETGLANCE_KEY_TWELVEDATA=... npm run dev     # 8 req/min, covers NSE/BSE (.NS)
+    TARGETGLANCE_KEY_FINNHUB=...    npm run dev     # 60 req/min, US + majors
+
+See .env.example for all of them.
+
+Gestures (or keys on a laptop: ↑ ↓ Enter Esc L):
+    swipe     select a row / change the chart range
+    tap       open, confirm, or advance the editor field
+    double    back, or cycle the ALL/STOCKS/CRYPTO filter
+    long      open the chart; in the editor it saves
+    menu      Chart / Portfolio / Journal / Reset view
+
+Where things are:
+    src/core/     pure logic — targets, alerts, paper book, candles, session, voice parser
+    src/server/   the framework-free quote + state service mounted by Vite
+    src/g2/       the glasses UI: frame layout, SDK bridge, 288x144 candle bitmap, mirror
+    src/companion/ Judge Mode page
+    tests/        the whole suite, including the live mock run
+    README.md     what it does and the hardware constraints it respects
+    PLAN.md       the reasoning, and what each round found
+
+This archive is the committed tree (commit 2c778af), so node_modules/ and dist/ are not
+included — `npm install` rebuilds both.
