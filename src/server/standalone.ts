@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { handle } from './handler.ts';
 import { createStore } from './store.ts';
 import { probe } from './quotes.ts';
+import { startTelegram } from './telegram.ts';
 
 /**
  * Optional second host for the same router: `npm run proxy` on :8787.
@@ -17,6 +18,7 @@ if (process.argv.includes('--probe')) {
 }
 
 const store = createStore();
+startTelegram(store);
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);

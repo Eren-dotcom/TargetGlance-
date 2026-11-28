@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import { handle } from './src/server/handler.ts';
 import { createStore } from './src/server/store.ts';
+import { startTelegram } from './src/server/telegram.ts';
 
 /**
  * The quote service runs inside the dev server, so the app and its API share one
@@ -8,6 +9,7 @@ import { createStore } from './src/server/store.ts';
  */
 function api(): Plugin {
   const store = createStore();
+  startTelegram(store);
   return {
     name: 'targetglance-api',
     configureServer(server) {

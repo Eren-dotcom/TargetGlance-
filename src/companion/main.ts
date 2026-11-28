@@ -36,6 +36,7 @@ async function loadAll() {
   renderChartSymbols();
   void renderChart();
   void renderProviders();
+  void renderTelegram();
   renderSim();
   renderToggles();
 }
@@ -114,6 +115,23 @@ async function renderProviders() {
       return tr;
     }),
   );
+}
+
+/** Telegram bot status: booleans from the server, never the token. */
+async function renderTelegram() {
+  let s: any = null;
+  try {
+    s = await fetch('/api/telegram/status').then((r) => r.json());
+  } catch {
+    s = null;
+  }
+  $('tgStatus').innerHTML = !s
+    ? '<span class="bad">status unavailable</span>'
+    : s.configured
+      ? s.paired
+        ? '<span class="good">bot live · chat paired · alerts on</span>'
+        : '<span class="good">bot live</span> · message the bot once to pair this chat'
+      : '<span class="dim">not configured</span> — create a bot with @BotFather, set <code>TARGETGLANCE_TG_TOKEN</code> on the server, restart, then message the bot.';
 }
 
 /**
@@ -311,6 +329,32 @@ function wire() {
     targets[intent.symbol] = next as Targets;
     await put('targets', targets);
     $('parseOut').textContent = `saved ${describeIntent(intent)}`;
+  };
+
+  // Voice in: the browser's own speech recognition fills the phrase box, then the exact
+  // same parser path as typing runs. No key, no server, no audio leaves the browser.
+  const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+  $('mic').onclick = () => {
+    if (!SR) {
+      $('parseOut').textContent = 'voice is not supported in this browser — Chrome (desktop/Android) has it built in; typing works everywhere';
+      return;
+    }
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.interimResults = false;
+    const btn = $('mic') as HTMLButtonElement;
+    btn.textContent = '🎤 Listening…';
+    rec.onresult = (e: any) => {
+      const said = e.results[0][0].transcript as string;
+      ($('phrase') as HTMLInputElement).value = said;
+      $('parseOut').textContent = `heard: "${said}"`;
+      ($('parse') as HTMLButtonElement).click();
+    };
+    rec.onerror = () => {
+      $('parseOut').textContent = 'voice did not catch that — try again or type it';
+    };
+    rec.onend = () => (btn.textContent = '🎤 Speak');
+    rec.start();
   };
 
   $('mock').onclick = async () => {

@@ -35,7 +35,7 @@ seed a portfolio, reset). Everything is one process on one port: the app and its
 share an origin, so there is no CORS and no second terminal.
 
 ```bash
-npm test             # 149 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page,
+npm test             # 155 tests: alerts, ladder, PnL, parser, API, controller, layout, SDK page,
                      #   state trust boundary, candle bitmap — plus the 90 s demo, live, over HTTP
 npm run probe        # which live sources answer from this machine right now?
 npm run proxy        # OPTIONAL: same quote service on :8787 if you want it separate
@@ -264,12 +264,32 @@ tests/        core · alerts · paper · server · app (controller lifecycle) ·
 ```
 
 `npm run proxy` and the dev server mount the **same** `src/server/handler.ts`, so there is one
-implementation of the API and two hosts.
+implementation of the API and three hosts: the Vercel adapter in `api/` is the third.
+
+## Voice in, Telegram out
+
+**Voice (companion).** The 🎤 Speak button uses the browser's built-in speech recognition
+(Chrome): say "SOL buy 140 sell 180", the phrase lands in the text box and the same regex
+parser runs. No key, no server, no audio leaves the browser. On the glasses the temple
+hold shows the same phrase format; the G2 microphone's raw PCM still has no STT behind
+it, and this build does not pretend otherwise.
+
+**Telegram alerts (optional).** The glasses can only alert while the app is open, so the
+server also drives a Telegram bot — the second screen. Create a bot with @BotFather, set
+`TARGETGLANCE_TG_TOKEN` on the server, restart, and message the bot once to pair. It
+pushes the moment a poll crosses one of your zones (`● BUY ZONE HIT · SOL @ 139`), using
+the same crossing-only engine as the glasses, and a reply like
+`NVDA buy 118-122 sell 148-152 stop 110` sets zones through the same parser — the glasses
+pick them up on their next poll. `/status` answers with live prices and zone state,
+`/zones` with your targets. The token is server-only and never returned by an API
+(`/api/telegram/status` answers with two booleans). Alert pushes run on the dev and
+standalone servers; on the hosted (serverless) deployment the bot's reply half works
+through a webhook and pushes pause with the instance — stated here, not hidden.
 
 ## What is deliberately not here
 
-Cloud speech-to-text (needs a key or a Whisper install — the regex parser is wired to the
-companion's text box and is ready for any STT), background push alerts, event badges.
+Cloud speech-to-text for the glasses themselves (needs a key or a Whisper install),
+background push on the G2 (not a platform feature), event badges.
 Details and reasons: `PLAN.md` §3.
 
 ## Hackathon

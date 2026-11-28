@@ -666,3 +666,32 @@ on price drift, not on code). The test now computes the move into the zone from 
 quote, the way the companion's simulate buttons already did. And `artifacts/chart-detail.png`,
 whose binary patch arrived without its data, was regenerated from the project's own
 `renderCandles` output (NVDA 121.28, buy 118–122, sell 148–152, stop 110, drawn 3×).
+
+## 24. Round eight: voice in, Telegram out, a host that is not localhost
+
+Three additions, each aimed at a judging line:
+
+1. **Voice on the companion.** The parser existed since round one; the microphone did
+   not. The companion's Speak button now uses the browser's built-in speech recognition
+   and feeds the transcript into the *same* parse path as typing — no key, no server, no
+   new parser. The G2 temple-hold prompt already showed the phrase format; now the phrase
+   can actually be spoken somewhere in the product. Glasses-side STT is still honestly
+   absent (raw PCM, no engine), and the README says so.
+2. **Telegram bot** (`src/server/telegram.ts`). The G2 cannot alert while closed — the
+   hackathon page says so itself — so the server polls with the glasses' own
+   `pollAlert` engine (same hysteresis, cooldown and wake-up baseline; the two surfaces
+   cannot disagree) and pushes zone hits to a paired Telegram chat. Replies run the same
+   target parser and write the same store, so a zone set from Telegram is on the glasses
+   at the next poll. `/status` and `/zones` are read-only answers. Token is env-only;
+   `/api/telegram/status` returns two booleans. Pairing and alert state are in-memory
+   (named shortcut in the module). 6 tests, Telegram and quotes stubbed at fetch.
+3. **Vercel host** (`api/[...slug].ts` + `vercel.json`). The framework-free handler
+   made this a 30-line adapter instead of a port: static `dist/` plus one catch-all
+   function. Verified locally by driving the real function module with fake req/res —
+   health, live quotes (BTC via Coinbase), telegram status and state round-trip all 200.
+   Serverless limits are written in the adapter's header, not discovered by judges:
+   state and Judge Mode live in instance memory, Telegram pushes run on the
+   always-on hosts.
+
+Also in this round: the dev server and the standalone proxy both start the bot poller
+(no token → silent no-op), and the companion gained a Telegram status section.

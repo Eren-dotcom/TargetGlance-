@@ -3,6 +3,7 @@ import { MAX_BODY, isStateKey, type Store } from './store.ts';
 import { validateWrite } from '../core/state.ts';
 import { RESET_JUDGE, candlesFor, judge, probe, quotesNow, type JudgeState } from './quotes.ts';
 import { keyStatus } from './provider.ts';
+import { handleTelegramUpdate, tgStatus } from './telegram.ts';
 import { RANGES, type Range } from '../core/candles.ts';
 import type { SessionOverride } from '../core/session.ts';
 
@@ -59,6 +60,21 @@ export async function handle(req: Req, store: Store): Promise<Res> {
 
   // Which providers are loaded — a mask, never the key. Safe for the companion page.
   if (pathname === '/api/providers' && method === 'GET') return ok(keyStatus());
+
+  // Telegram: status is booleans only (never the token or chat id). The webhook accepts
+  // bot updates on hosted deployments where long-polling cannot run; Telegram always
+  // gets a 200 so it does not retry-storm a bad update.
+  // shortcut: the webhook path carries no secret token segment — fine for a hackathon
+  // demo behind an unlisted URL, add a secret path before any real deployment.
+  if (pathname === '/api/telegram/status' && method === 'GET') return ok(tgStatus());
+  if (pathname === '/api/telegram' && method === 'POST') {
+    try {
+      await handleTelegramUpdate(JSON.parse(req.body || '{}'), store);
+    } catch {
+      // A malformed update is dropped, not surfaced: Telegram retries on non-200.
+    }
+    return ok({ ok: true });
+  }
 
   if (pathname.startsWith('/api/state/')) {
     const key = pathname.slice('/api/state/'.length);

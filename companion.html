@@ -48,12 +48,14 @@
         </div>
         <div class="row" id="presets"></div>
         <div class="row" id="chips"></div>
-        <h2 style="margin-top:14px">TARGETS — REGEX PARSER, NO LLM</h2>
+        <h2 style="margin-top:14px">TARGETS — SAY IT OR TYPE IT (REGEX PARSER, NO LLM)</h2>
         <div class="row">
           <input id="phrase" type="text" placeholder='SOL buy 140 sell 180  ·  BTC buy 92k sell 105k  ·  NVDA buy 118-122 sell 148-152' />
+          <button id="mic">🎤 Speak</button>
           <button id="parse">Apply</button>
         </div>
         <div id="parseOut" class="dim"></div>
+        <div class="dim" style="font-size:11px">Speak uses your browser's built-in speech recognition (Chrome): the phrase lands in the box, the same parser runs, nothing is sent to a server. On the glasses, the temple hold shows this same phrase format.</div>
         <h2 style="margin-top:14px">TARGETS &amp; LADDER</h2>
         <table>
           <thead><tr><th>sym</th><th>buy</th><th>sell</th><th>stop</th><th>rungs</th></tr></thead>
@@ -121,6 +123,16 @@
           Set on the <b>server</b> only: <code>TARGETGLANCE_KEY_FINNHUB</code>, <code>…_TWELVEDATA</code>,
           <code>…_POLYGON</code>. The key is never bundled, never returned by an API and never logged —
           this table shows a mask. Test keys at <a style="color:var(--accent)" href="/health">/api/providers</a>.
+        </div>
+      </section>
+
+      <section>
+        <h2>TELEGRAM ALERTS — THE SECOND SCREEN</h2>
+        <div id="tgStatus" class="dim">…</div>
+        <div class="dim" style="margin-top:6px;font-size:11px">
+          The glasses can only alert while the app is open; the bot reaches you any time the server runs.
+          It pushes zone hits, and a reply like <code>NVDA buy 118-122 sell 148-152</code> sets zones with the
+          same parser — they appear on the glasses on the next poll. Commands: <code>/status</code> · <code>/zones</code> · <code>/help</code>
         </div>
       </section>
 
